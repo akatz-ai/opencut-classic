@@ -14,6 +14,8 @@ export type CanvasRendererParams = {
 	width: number;
 	height: number;
 	fps: FrameRate;
+	outputWidth?: number;
+	outputHeight?: number;
 };
 
 export class CanvasRenderer {
@@ -21,22 +23,35 @@ export class CanvasRenderer {
 	context: OffscreenCanvasRenderingContext2D;
 	width: number;
 	height: number;
+	outputWidth: number;
+	outputHeight: number;
 	fps: FrameRate;
 
-	constructor({ width, height, fps }: CanvasRendererParams) {
+	constructor({
+		width,
+		height,
+		fps,
+		outputWidth = width,
+		outputHeight = height,
+	}: CanvasRendererParams) {
 		this.width = width;
 		this.height = height;
+		this.outputWidth = outputWidth;
+		this.outputHeight = outputHeight;
 		this.fps = fps;
 
-		const surface = createCanvasSurface({ width, height });
+		const surface = createCanvasSurface({
+			width: outputWidth,
+			height: outputHeight,
+		});
 		this.canvas = surface.canvas;
 		this.context = surface.context;
 	}
 
 	getOutputCanvas(): HTMLCanvasElement {
 		wasmCompositor.ensureInitialized({
-			width: this.width,
-			height: this.height,
+			width: this.outputWidth,
+			height: this.outputHeight,
 		});
 		return wasmCompositor.getCanvas();
 	}
@@ -44,6 +59,8 @@ export class CanvasRenderer {
 	setSize({ width, height }: { width: number; height: number }) {
 		this.width = width;
 		this.height = height;
+		this.outputWidth = width;
+		this.outputHeight = height;
 
 		const surface = createCanvasSurface({ width, height });
 		this.canvas = surface.canvas;
@@ -68,8 +85,8 @@ export class CanvasRenderer {
 			fn: () => buildFrameDescriptor({ node, renderer: this }),
 		});
 		wasmCompositor.ensureInitialized({
-			width: this.width,
-			height: this.height,
+			width: this.outputWidth,
+			height: this.outputHeight,
 		});
 		measureSpanSync({
 			name: "syncTextures",

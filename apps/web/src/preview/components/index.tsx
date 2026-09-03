@@ -24,6 +24,8 @@ import {
 	usePreviewViewportState,
 } from "./preview-viewport";
 import { incrementCounter } from "@/diagnostics/render-perf";
+import { getPreviewRenderSize } from "@/preview/adaptive-resolution";
+import { usePreviewStore } from "@/preview/preview-store";
 
 function usePreviewSize() {
 	const canvasSize = useEditor(
@@ -145,9 +147,11 @@ function PreviewCanvas({
 	const renderingRef = useRef(false);
 	const { width: nativeWidth, height: nativeHeight } = usePreviewSize();
 	const viewportSize = useContainerSize({ containerRef: viewportRef });
+	const resolutionMode = usePreviewStore((state) => state.resolutionMode);
 	const editor = useEditor();
 	const activeProject = useEditor((e) => e.project.getActive());
 	const renderTree = useEditor((e) => e.renderer.getRenderTree());
+	const isExporting = useEditor((e) => e.project.getExportState().isExporting);
 	const viewport = usePreviewViewportState({
 		canvasHeight: nativeHeight,
 		canvasWidth: nativeWidth,
@@ -156,14 +160,85 @@ function PreviewCanvas({
 		viewportWidth: viewportSize.width,
 	});
 	const { canPan, panByScreenDelta, scaleZoom } = viewport;
+	const renderSize = useMemo(
+		() =>
+			getPreviewRenderSize({
+				canvasSize: { width: nativeWidth, height: nativeHeight },
+				viewportSize,
+				devicePixelRatio: window.devicePixelRatio,
+				mode: resolutionMode,
+			}),
+		[nativeWidth, nativeHeight, viewportSize, resolutionMode],
+	);
 
 	const renderer = useMemo(() => {
 		return new CanvasRenderer({
 			width: nativeWidth,
 			height: nativeHeight,
+			outputWidth: renderSize.width,
+			outputHeight: renderSize.height,
 			fps: activeProject.settings.fps,
 		});
-	}, [nativeWidth, nativeHeight, activeProject.settings.fps]);
+	}, [
+		nativeWidth,
+		nativeHeight,
+		renderSize.width,
+		renderSize.height,
+		activeProject.settings.fps,
+	]);
+
+	useEffect(() => {
+		window.__opencutPreviewResolution = {
+			mode: resolutionMode,
+			width: renderSize.width,
+			height: renderSize.height,
+		};
+	}, [renderSize.height, renderSize.width, resolutionMode]);
+
+	useEffect(() => {
+		if (isExporting) return;
+		renderer.getOutputCanvas();
+		lastFrameRef.current = -1;
+	}, [isExporting, renderer]);
+
+	useEffect(() => {
+		window.__opencutPreviewBenchmark = async ({
+			frames = 60,
+			startFrame = 0,
+		} = {}) => {
+			if (!renderTree) throw new Error("Preview render tree is unavailable");
+			const safeFrames = Math.max(1, Math.min(600, Math.round(frames)));
+			const safeStartFrame = Math.max(0, Math.round(startFrame));
+			const ticksPerFrame = Math.round(
+				(TICKS_PER_SECOND * renderer.fps.denominator) / renderer.fps.numerator,
+			);
+			window.__renderPerf = true;
+			window.__renderPerfLastReport = undefined;
+			window.__renderPerfReset?.();
+			renderingRef.current = true;
+			const startedAt = performance.now();
+			try {
+				for (let index = 0; index < safeFrames; index++) {
+					await renderer.render({
+						node: renderTree,
+						time: (safeStartFrame + index) * ticksPerFrame,
+					});
+				}
+			} finally {
+				renderingRef.current = false;
+			}
+			return {
+				elapsedMs: performance.now() - startedAt,
+				frames: safeFrames,
+				report:
+					window.__renderPerfLastReport ??
+					window.__renderPerfSnapshot?.() ?? { frames: 0, spans: [], counters: [] },
+			};
+		};
+		return () => {
+			window.__opencutPreviewBenchmark = undefined;
+		};
+	}, [renderTree, renderer]);
 
 	// Mount the compositor's output canvas directly into the preview. wgpu
 	// renders straight into this element, so there is no intermediate copy —
@@ -184,7 +259,7 @@ function PreviewCanvas({
 	}, [renderer]);
 
 	const render = useCallback(() => {
-		if (!renderTree) return;
+		if (!renderTree || isExporting) return;
 		if (renderingRef.current) {
 			incrementCounter({ name: "previewFrameSkippedWhileBusy" });
 			return;
@@ -209,7 +284,7 @@ function PreviewCanvas({
 		renderer.render({ node: renderTree, time: renderTime }).then(() => {
 			renderingRef.current = false;
 		});
-	}, [renderer, renderTree, editor.playback, editor.timeline]);
+	}, [renderer, renderTree, editor.playback, editor.timeline, isExporting]);
 
 	useRafLoop(render);
 

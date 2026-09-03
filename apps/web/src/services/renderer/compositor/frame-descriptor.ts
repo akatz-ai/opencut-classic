@@ -53,8 +53,8 @@ export async function buildFrameDescriptor({
 
 	return {
 		frame: {
-			width: renderer.width,
-			height: renderer.height,
+			width: renderer.outputWidth,
+			height: renderer.outputHeight,
 			clear: {
 				color: [0, 0, 0, 1],
 			},
@@ -92,7 +92,7 @@ async function collectNode({
 
 	if (node instanceof ColorNode) {
 		const textureId = `${path}:color`;
-		const { width, height } = renderer;
+		const { outputWidth: width, outputHeight: height } = renderer;
 		textures.set(textureId, {
 			kind: "rendered",
 			id: textureId,
@@ -136,7 +136,7 @@ async function collectNode({
 			return;
 		}
 		const textureId = `${path}:blur-background`;
-		const { width, height } = renderer;
+		const { outputWidth: width, outputHeight: height } = renderer;
 		const { backdropSource, passes } = node.resolved;
 		// Backdrop pixels come from a decoded video/image frame whose identity
 		// already changes when it changes. Hashing the source reference is
@@ -294,7 +294,7 @@ function collectTextNode({
 	}
 
 	const textureId = `${path}:text`;
-	const { width, height } = renderer;
+	const { outputWidth: width, outputHeight: height } = renderer;
 	// Text output is fully determined by node.params + node.resolved. Both are
 	// plain data we can stringify cheaply; the resolved measured layout is the
 	// expensive part of text setup, so stringifying it here is orders of
@@ -310,7 +310,13 @@ function collectTextNode({
 		width,
 		height,
 		draw: (ctx) => {
+			ctx.save();
+			ctx.scale(
+				renderer.outputWidth / renderer.width,
+				renderer.outputHeight / renderer.height,
+			);
 			renderTextToContext({ node, ctx });
+			ctx.restore();
 		},
 	});
 	items.push({
@@ -339,16 +345,20 @@ function computeVisualTransform({
 		renderer.width / sourceWidth,
 		renderer.height / sourceHeight,
 	);
+	const outputScaleX = renderer.outputWidth / renderer.width;
+	const outputScaleY = renderer.outputHeight / renderer.height;
 	const scaledWidth = sourceWidth * containScale * resolved.transform.scaleX;
 	const scaledHeight = sourceHeight * containScale * resolved.transform.scaleY;
 	const absWidth = Math.abs(scaledWidth);
 	const absHeight = Math.abs(scaledHeight);
 
 	return {
-		centerX: renderer.width / 2 + resolved.transform.position.x,
-		centerY: renderer.height / 2 + resolved.transform.position.y,
-		width: absWidth,
-		height: absHeight,
+		centerX:
+			(renderer.width / 2 + resolved.transform.position.x) * outputScaleX,
+		centerY:
+			(renderer.height / 2 + resolved.transform.position.y) * outputScaleY,
+		width: absWidth * outputScaleX,
+		height: absHeight * outputScaleY,
 		rotationDegrees: resolved.transform.rotate,
 		flipX: scaledWidth < 0,
 		flipY: scaledHeight < 0,
@@ -359,10 +369,10 @@ function fullCanvasTransform(
 	renderer: CanvasRenderer,
 ): QuadTransformDescriptor {
 	return {
-		centerX: renderer.width / 2,
-		centerY: renderer.height / 2,
-		width: renderer.width,
-		height: renderer.height,
+		centerX: renderer.outputWidth / 2,
+		centerY: renderer.outputHeight / 2,
+		width: renderer.outputWidth,
+		height: renderer.outputHeight,
 		rotationDegrees: 0,
 		flipX: false,
 		flipY: false,
@@ -408,7 +418,10 @@ function buildMaskArtifacts({
 	const feather = body.kind === "drawWithFeather" ? 0 : mask.params.feather;
 
 	const maskTextureId = `${path}:mask`;
-	const { width: canvasWidth, height: canvasHeight } = renderer;
+	const {
+		outputWidth: canvasWidth,
+		outputHeight: canvasHeight,
+	} = renderer;
 	const maskContentHash = `mask:${mask.type}:${JSON.stringify(mask.params)}:${transformHash(transform)}:${canvasWidth}x${canvasHeight}:body=${body.kind}:fastPath=${usesOpaqueFastPath}`;
 	const drawMask: TextureCanvasDrawFn = (ctx) => {
 		const { canvas: elementMaskCanvas, context: elementMaskCtx } =
@@ -526,7 +539,12 @@ function buildMaskArtifacts({
 	return {
 		mask: {
 			textureId: maskTextureId,
-			feather,
+			feather:
+				feather *
+				Math.min(
+					renderer.outputWidth / renderer.width,
+					renderer.outputHeight / renderer.height,
+				),
 			inverted: mask.params.inverted,
 		},
 		strokeLayer,

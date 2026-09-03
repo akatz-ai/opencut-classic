@@ -70,4 +70,8 @@ export class LruCache<TKey, TValue> {
 	values(): IterableIterator<TValue> {
 		return this.entries.values();
 	}
+
+	keys(): IterableIterator<TKey> {
+		return this.entries.keys();
+	}
 }

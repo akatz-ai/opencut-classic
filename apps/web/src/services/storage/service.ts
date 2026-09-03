@@ -21,8 +21,12 @@ import {
 	migrations,
 	runStorageMigrations,
 } from "@/services/storage/migrations";
-import type { Bookmark, SceneTracks, TScene } from "@/timeline";
+import type { Bookmark, SceneTracks } from "@/timeline";
 import { roundMediaTime } from "@/wasm";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
+}
 
 function normalizeBookmarks({ raw }: { raw: unknown }): Bookmark[] {
 	if (!Array.isArray(raw)) return [];
@@ -31,20 +35,15 @@ function normalizeBookmarks({ raw }: { raw: unknown }): Bookmark[] {
 			if (typeof item === "number") {
 				return { time: roundMediaTime({ time: item }) };
 			}
-			const obj = item as Record<string, unknown>;
-			if (
-				typeof obj !== "object" ||
-				obj === null ||
-				typeof obj.time !== "number"
-			) {
+			if (!isRecord(item) || typeof item.time !== "number") {
 				return null;
 			}
 			return {
-				time: roundMediaTime({ time: obj.time }),
-				...(typeof obj.note === "string" && { note: obj.note }),
-				...(typeof obj.color === "string" && { color: obj.color }),
-				...(typeof obj.duration === "number" && {
-					duration: roundMediaTime({ time: obj.duration }),
+				time: roundMediaTime({ time: item.time }),
+				...(typeof item.note === "string" && { note: item.note }),
+				...(typeof item.color === "string" && { color: item.color }),
+				...(typeof item.duration === "number" && {
+					duration: roundMediaTime({ time: item.duration }),
 				}),
 			};
 		})
@@ -263,12 +262,17 @@ class StorageService {
 				id: serializedProject.metadata.id,
 				name: serializedProject.metadata.name,
 				thumbnail: serializedProject.metadata.thumbnail,
-				duration: roundMediaTime({
-					time:
-						serializedProject.metadata.duration ??
-						getProjectDurationFromScenes({
-							scenes: (serializedProject.scenes ?? []) as unknown as TScene[],
-						}),
+					duration: roundMediaTime({
+						time:
+							serializedProject.metadata.duration ??
+							getProjectDurationFromScenes({
+								scenes: (serializedProject.scenes ?? []).map((scene) => ({
+									...scene,
+									bookmarks: normalizeBookmarks({ raw: scene.bookmarks }),
+									createdAt: new Date(scene.createdAt),
+									updatedAt: new Date(scene.updatedAt),
+								})),
+							}),
 				}),
 				createdAt: new Date(serializedProject.metadata.createdAt),
 				updatedAt: new Date(serializedProject.metadata.updatedAt),
@@ -303,6 +307,19 @@ class StorageService {
 			width: mediaAsset.width,
 			height: mediaAsset.height,
 			duration: mediaAsset.duration,
+			fps: mediaAsset.fps,
+			hasAudio: mediaAsset.hasAudio,
+			codec: mediaAsset.codec,
+			canDecode: mediaAsset.canDecode,
+			proxy: mediaAsset.proxy
+				? {
+						storageKey: `${mediaAsset.id}.proxy.mp4`,
+						width: mediaAsset.proxy.width,
+						height: mediaAsset.proxy.height,
+						size: mediaAsset.proxy.size,
+						hardwareEncoded: mediaAsset.proxy.hardwareEncoded,
+					}
+				: undefined,
 			thumbnailUrl: mediaAsset.thumbnailUrl,
 			ephemeral: mediaAsset.ephemeral,
 		};
@@ -312,13 +329,24 @@ class StorageService {
 				key: mediaAsset.id,
 				value: mediaAsset.file,
 			});
+			if (mediaAsset.proxy) {
+				await mediaAssetsAdapter.set({
+					key: `${mediaAsset.id}.proxy.mp4`,
+					value: mediaAsset.proxy.file,
+				});
+			}
 			await mediaMetadataAdapter.set({
 				key: mediaAsset.id,
 				value: metadata,
 			});
 		} catch (error) {
 			try {
-				await mediaAssetsAdapter.remove(mediaAsset.id);
+				await Promise.all([
+					mediaAssetsAdapter.remove(mediaAsset.id),
+					...(mediaAsset.proxy
+						? [mediaAssetsAdapter.remove(`${mediaAsset.id}.proxy.mp4`)]
+						: []),
+				]);
 			} catch {
 				// Ignore cleanup failures so the original storage error is preserved.
 			}
@@ -349,6 +377,9 @@ class StorageService {
 		]);
 
 		if (!file || !metadata) return null;
+		const proxyFile = metadata.proxy
+			? await mediaAssetsAdapter.get(metadata.proxy.storageKey)
+			: null;
 
 		let url: string;
 		if (metadata.type === "image" && (!file.type || file.type === "")) {
@@ -373,12 +404,61 @@ class StorageService {
 			type: metadata.type,
 			file,
 			url,
+			codec: metadata.codec,
+			canDecode: metadata.canDecode,
 			width: metadata.width,
 			height: metadata.height,
 			duration: metadata.duration,
+			fps: metadata.fps,
+			hasAudio: metadata.hasAudio,
 			thumbnailUrl: metadata.thumbnailUrl,
 			ephemeral: metadata.ephemeral,
+			...(proxyFile && metadata.proxy
+				? {
+						proxy: {
+							file: proxyFile,
+							url: URL.createObjectURL(proxyFile),
+							width: metadata.proxy.width,
+							height: metadata.proxy.height,
+							size: metadata.proxy.size,
+							hardwareEncoded: metadata.proxy.hardwareEncoded,
+						},
+						proxyState: "ready" as const,
+					}
+				: {}),
 		};
+	}
+
+	async saveMediaProxy({
+		projectId,
+		mediaId,
+		stream,
+		width,
+		height,
+		hardwareEncoded,
+	}: {
+		projectId: string;
+		mediaId: string;
+		stream: ReadableStream<Uint8Array>;
+		width: number;
+		height: number;
+		hardwareEncoded: boolean;
+	}): Promise<File> {
+		const { mediaMetadataAdapter, mediaAssetsAdapter } =
+			this.getProjectMediaAdapters({ projectId });
+		const metadata = await mediaMetadataAdapter.get(mediaId);
+		if (!metadata) throw new Error("Media metadata is missing");
+		const storageKey = `${mediaId}.proxy.mp4`;
+		const file = await mediaAssetsAdapter.setStream({ key: storageKey, stream });
+		metadata.proxy = {
+			storageKey,
+			width,
+			height,
+			size: file.size,
+			hardwareEncoded,
+		};
+		await mediaMetadataAdapter.set({ key: mediaId, value: metadata });
+		return file;
 	}
 
 	async loadAllMediaAssets({
@@ -413,8 +493,12 @@ class StorageService {
 		const { mediaMetadataAdapter, mediaAssetsAdapter } =
 			this.getProjectMediaAdapters({ projectId });
 
+		const metadata = await mediaMetadataAdapter.get(id);
 		await Promise.all([
 			mediaAssetsAdapter.remove(id),
+			...(metadata?.proxy
+				? [mediaAssetsAdapter.remove(metadata.proxy.storageKey)]
+				: []),
 			mediaMetadataAdapter.remove(id),
 		]);
 	}

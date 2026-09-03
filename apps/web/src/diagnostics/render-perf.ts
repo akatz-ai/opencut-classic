@@ -43,6 +43,19 @@ declare global {
 		__renderPerfLastReport?: RenderPerfReport;
 		__renderPerfSnapshot?: () => RenderPerfReport;
 		__renderPerfReset?: () => void;
+		__opencutPreviewResolution?: {
+			mode: string;
+			width: number;
+			height: number;
+		};
+		__opencutPreviewBenchmark?: (options?: {
+			frames?: number;
+			startFrame?: number;
+		}) => Promise<{
+			elapsedMs: number;
+			frames: number;
+			report: RenderPerfReport;
+		}>;
 	}
 }
 

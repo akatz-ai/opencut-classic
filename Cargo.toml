@@ -2,10 +2,11 @@
 resolver = "2"
 members = [
     "apps/desktop",
+    "apps/media-engine",
     "rust/crates/time",
     "rust/crates/bridge",
     "rust/crates/effects",
     "rust/crates/gpu",
     "rust/crates/masks",
-    "rust/wasm", "rust/crates/compositor",
+    "rust/wasm", "rust/crates/compositor", "rust/crates/media",
 ]

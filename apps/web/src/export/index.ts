@@ -23,6 +23,7 @@ export interface ExportOptions {
 
 export interface ExportDestination {
 	writable: WritableStream<StreamTargetChunk>;
+	writeResponse?: (stream: ReadableStream<Uint8Array>) => Promise<void>;
 }
 
 export interface ExportResult {
@@ -99,6 +100,22 @@ export async function selectExportDestination({
 			status: "selected",
 			destination: {
 				writable: writable as WritableStream<StreamTargetChunk>,
+				writeResponse: async (stream) => {
+					const reader = stream.getReader();
+					try {
+						while (true) {
+							const { value, done } = await reader.read();
+							if (done) break;
+							await writable.write(new Uint8Array(value));
+						}
+						await writable.close();
+					} catch (error) {
+						await writable.abort().catch(() => undefined);
+						throw error;
+					} finally {
+						reader.releaseLock();
+					}
+				},
 			},
 		};
 	} catch (error) {

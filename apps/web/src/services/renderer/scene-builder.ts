@@ -66,11 +66,14 @@ function buildTrackNodes({
 				}
 
 				if (element.type === "video" && mediaAsset.type === "video") {
+					const previewProxy = isPreview ? mediaAsset.proxy : undefined;
 					nodes.push(
 						new VideoNode({
-							mediaId: mediaAsset.id,
-							url: mediaAsset.url,
-							file: mediaAsset.file,
+							mediaId: previewProxy
+								? `${mediaAsset.id}:proxy`
+								: mediaAsset.id,
+							url: previewProxy?.url ?? mediaAsset.url,
+							file: previewProxy?.file ?? mediaAsset.file,
 							duration: element.duration,
 							timeOffset: element.startTime,
 							trimStart: element.trimStart,
@@ -169,10 +172,12 @@ function buildBlurBackgroundNodes({
 	track,
 	mediaMap,
 	blurIntensity,
+	isPreview,
 }: {
 	track: TimelineTrack | undefined;
 	mediaMap: Map<string, MediaAsset>;
 	blurIntensity: number;
+	isPreview?: boolean;
 }): AnyBaseNode[] {
 	if (!track) {
 		return [];
@@ -195,11 +200,15 @@ function buildBlurBackgroundNodes({
 			continue;
 		}
 
+		const previewProxy =
+			isPreview && mediaAsset.type === "video" ? mediaAsset.proxy : undefined;
 		nodes.push(
 			new BlurBackgroundNode({
-				mediaId: mediaAsset.id,
-				url: mediaAsset.url,
-				file: mediaAsset.file,
+				mediaId: previewProxy
+					? `${mediaAsset.id}:proxy`
+					: mediaAsset.id,
+				url: previewProxy?.url ?? mediaAsset.url,
+				file: previewProxy?.file ?? mediaAsset.file,
 				mediaType: mediaAsset.type,
 				duration: element.duration,
 				timeOffset: element.startTime,
@@ -254,6 +263,7 @@ export function buildScene({
 			mediaMap,
 			blurIntensity:
 				background.blurIntensity ?? DEFAULT_BACKGROUND_BLUR_INTENSITY,
+			isPreview,
 		});
 		for (const node of blurNodes) {
 			rootNode.add(node);

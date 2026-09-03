@@ -3,24 +3,19 @@ import { persist } from "zustand/middleware";
 import { isGuideId, type GuideId } from "@/guides";
 import { DEFAULT_GRID_CONFIG } from "@/guides/grid";
 import type { GridConfig } from "@/guides/types";
+import type { PreviewResolutionMode } from "@/preview/adaptive-resolution";
+import { isPreviewResolutionMode } from "@/preview/adaptive-resolution";
 
 type PreviewOverlaysState = Record<string, boolean>;
-
-interface PersistedPreviewState {
-	activeGuide?: string | null;
-	layoutGuide?: {
-		platform?: string | null;
-	};
-	overlays?: PreviewOverlaysState;
-	gridConfig?: GridConfig;
-}
 
 interface PreviewState {
 	activeGuide: GuideId | null;
 	overlays: PreviewOverlaysState;
 	gridConfig: GridConfig;
+	resolutionMode: PreviewResolutionMode;
 	toggleGuide: (guideId: GuideId) => void;
 	setGridConfig: (config: Partial<GridConfig>) => void;
+	setResolutionMode: (mode: PreviewResolutionMode) => void;
 	setOverlayVisibility: ({
 		overlayId,
 		isVisible,
@@ -33,11 +28,15 @@ interface PreviewState {
 
 const DEFAULT_PREVIEW_OVERLAYS: PreviewOverlaysState = {};
 
-function getPersistedActiveGuide(
-	state: PersistedPreviewState | undefined,
-): GuideId | null {
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
+}
+
+function getPersistedActiveGuide(state: unknown): GuideId | null {
+	if (!isRecord(state)) return null;
+	const layoutGuide = isRecord(state.layoutGuide) ? state.layoutGuide : undefined;
 	const persistedGuide =
-		state?.activeGuide ?? state?.layoutGuide?.platform ?? null;
+		state.activeGuide ?? layoutGuide?.platform ?? null;
 
 	if (typeof persistedGuide !== "string") {
 		return null;
@@ -46,12 +45,38 @@ function getPersistedActiveGuide(
 	return isGuideId(persistedGuide) ? persistedGuide : null;
 }
 
+function getPersistedGridConfig(state: unknown): GridConfig {
+	if (!isRecord(state) || !isRecord(state.gridConfig)) {
+		return DEFAULT_GRID_CONFIG;
+	}
+	return {
+		rows:
+			typeof state.gridConfig.rows === "number"
+				? state.gridConfig.rows
+				: DEFAULT_GRID_CONFIG.rows,
+		cols:
+			typeof state.gridConfig.cols === "number"
+				? state.gridConfig.cols
+				: DEFAULT_GRID_CONFIG.cols,
+	};
+}
+
+function getPersistedResolutionMode(state: unknown): PreviewResolutionMode {
+	if (!isRecord(state) || typeof state.resolutionMode !== "string") {
+		return "auto";
+	}
+	return isPreviewResolutionMode(state.resolutionMode)
+		? state.resolutionMode
+		: "auto";
+}
+
 export const usePreviewStore = create<PreviewState>()(
 	persist(
 		(set) => ({
 			activeGuide: null,
 			overlays: DEFAULT_PREVIEW_OVERLAYS,
 			gridConfig: DEFAULT_GRID_CONFIG,
+			resolutionMode: "auto",
 			toggleGuide: (guideId) => {
 				set((state) => ({
 					activeGuide: state.activeGuide === guideId ? null : guideId,
@@ -62,6 +87,7 @@ export const usePreviewStore = create<PreviewState>()(
 					gridConfig: { ...state.gridConfig, ...config },
 				}));
 			},
+			setResolutionMode: (resolutionMode) => set({ resolutionMode }),
 			setOverlayVisibility: ({ overlayId, isVisible }) => {
 				set((state) => ({
 					overlays: {
@@ -81,23 +107,20 @@ export const usePreviewStore = create<PreviewState>()(
 		}),
 		{
 			name: "preview-settings",
-			version: 6,
+			version: 7,
 			migrate: (persistedState) => {
-				const state = persistedState as PersistedPreviewState | undefined;
-
 				return {
-					activeGuide: getPersistedActiveGuide(state),
+					activeGuide: getPersistedActiveGuide(persistedState),
 					overlays: DEFAULT_PREVIEW_OVERLAYS,
-					gridConfig: {
-						rows: state?.gridConfig?.rows ?? DEFAULT_GRID_CONFIG.rows,
-						cols: state?.gridConfig?.cols ?? DEFAULT_GRID_CONFIG.cols,
-					},
+					gridConfig: getPersistedGridConfig(persistedState),
+					resolutionMode: getPersistedResolutionMode(persistedState),
 				};
 			},
 			partialize: (state) => ({
 				activeGuide: state.activeGuide,
 				overlays: state.overlays,
 				gridConfig: state.gridConfig,
+				resolutionMode: state.resolutionMode,
 			}),
 		},
 	),

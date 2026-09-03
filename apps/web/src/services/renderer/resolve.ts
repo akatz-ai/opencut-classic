@@ -206,6 +206,10 @@ async function resolveVideoNode({
 		mediaId: node.params.mediaId,
 		file: node.params.file,
 		time: mediaTimeToSeconds({ time: roundMediaTime({ time: sourceTimeTicks }) }),
+		maxSourceSize: Math.max(
+			context.renderer.outputWidth,
+			context.renderer.outputHeight,
+		),
 	});
 	if (!frame) {
 		return null;
@@ -236,9 +240,15 @@ async function resolveImageNode({
 	node: ImageNode;
 	context: ResolveContext;
 }): Promise<ResolvedVisualSourceNodeState | null> {
+	const outputMaxSourceSize = Math.max(
+		context.renderer.outputWidth,
+		context.renderer.outputHeight,
+	);
 	const source = await loadImageSource({
 		url: node.params.url,
-		maxSourceSize: node.params.maxSourceSize,
+		maxSourceSize: node.params.maxSourceSize
+			? Math.min(node.params.maxSourceSize, outputMaxSourceSize)
+			: outputMaxSourceSize,
 	});
 	const visualState = resolveVisualState({
 		params: node.params,
@@ -363,8 +373,8 @@ function resolveTextNode({
 			effects: node.params.effects,
 			animations: node.params.animations,
 			localTime,
-			width: context.renderer.width,
-			height: context.renderer.height,
+			width: context.renderer.outputWidth,
+			height: context.renderer.outputHeight,
 		}),
 		measuredText: measureTextElement({
 			element: node.params,
@@ -387,7 +397,7 @@ async function resolveBlurBackgroundNode({
 		return null;
 	}
 
-	const backdropSource = await resolveBackdropSource({ node, clipTime });
+	const backdropSource = await resolveBackdropSource({ node, clipTime, context });
 	if (!backdropSource) {
 		return null;
 	}
@@ -397,12 +407,12 @@ async function resolveBlurBackgroundNode({
 		passes: buildGaussianBlurPasses({
 			sigmaX: intensityToSigma({
 				intensity: node.params.blurIntensity,
-				resolution: context.renderer.width,
+				resolution: context.renderer.outputWidth,
 				reference: 1920,
 			}),
 			sigmaY: intensityToSigma({
 				intensity: node.params.blurIntensity,
-				resolution: context.renderer.height,
+				resolution: context.renderer.outputHeight,
 				reference: 1080,
 			}),
 		}),
@@ -412,9 +422,11 @@ async function resolveBlurBackgroundNode({
 async function resolveBackdropSource({
 	node,
 	clipTime,
+	context,
 }: {
 	node: BlurBackgroundNode;
 	clipTime: number;
+	context: ResolveContext;
 }): Promise<BackdropSource | null> {
 	if (node.params.mediaType === "video") {
 		const sourceTimeTicks =
@@ -427,6 +439,10 @@ async function resolveBackdropSource({
 			mediaId: node.params.mediaId,
 			file: node.params.file,
 			time: mediaTimeToSeconds({ time: roundMediaTime({ time: sourceTimeTicks }) }),
+			maxSourceSize: Math.max(
+				context.renderer.outputWidth,
+				context.renderer.outputHeight,
+			),
 		});
 		if (!frame) {
 			return null;
@@ -439,7 +455,13 @@ async function resolveBackdropSource({
 		};
 	}
 
-	const source = await loadImageSource({ url: node.params.url });
+	const source = await loadImageSource({
+		url: node.params.url,
+		maxSourceSize: Math.max(
+			context.renderer.outputWidth,
+			context.renderer.outputHeight,
+		),
+	});
 	return {
 		source: source.source,
 		width: source.width,
@@ -466,8 +488,8 @@ function resolveEffectLayerNode({
 	const passes = resolveEffectPasses({
 		definition,
 		effectParams: node.params.effectParams,
-		width: context.renderer.width,
-		height: context.renderer.height,
+		width: context.renderer.outputWidth,
+		height: context.renderer.outputHeight,
 	});
 	if (passes.length === 0) {
 		return null;

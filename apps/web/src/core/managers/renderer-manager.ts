@@ -4,9 +4,17 @@ import type { ExportDestination, ExportOptions, ExportResult } from "@/export";
 import { CanvasRenderer } from "@/services/renderer/canvas-renderer";
 import { SceneExporter } from "@/services/renderer/scene-exporter";
 import { buildScene } from "@/services/renderer/scene-builder";
-import { createTimelineAudioBuffer } from "@/media/audio";
+import { collectAudioClips, createTimelineAudioBuffer } from "@/media/audio";
 import { formatTimecode } from "opencut-wasm";
 import { downloadBlob } from "@/utils/browser";
+import {
+	getNativeMediaHealth,
+	NativeExportSession,
+	type NativeAudioClip,
+} from "@/services/native-media/client";
+import { shouldMaintainPitch } from "@/retime/rate";
+import { hasAnimatedVolume } from "@/timeline/audio-state";
+import { TICKS_PER_SECOND } from "@/wasm";
 
 type SnapshotResult =
 	| { success: true; blob: Blob; filename: string }
@@ -169,9 +177,25 @@ export class RendererManager {
 
 			const exportFps = fps ?? activeProject.settings.fps;
 			const canvasSize = activeProject.settings.canvasSize;
+			const nativeMediaHealth =
+				format === "mp4" && destination?.writeResponse
+					? await getNativeMediaHealth()
+					: null;
+			const nativeAudioClips = includeAudio
+				? await collectAudioClips({ tracks, mediaAssets })
+				: [];
+			const hasAnimatedAudio = nativeAudioClips.some((clip) =>
+				hasAnimatedVolume({ element: clip.timelineElement }),
+			);
+			const shouldUseNativeExport = Boolean(
+				includeAudio &&
+					nativeMediaHealth?.available &&
+					destination?.writeResponse &&
+					!hasAnimatedAudio,
+			);
 
 			let audioBuffer: AudioBuffer | null = null;
-			if (includeAudio) {
+			if (includeAudio && !shouldUseNativeExport) {
 				onProgress?.({ progress: 0.05 });
 				audioBuffer = await createTimelineAudioBuffer({
 					tracks,
@@ -188,21 +212,30 @@ export class RendererManager {
 				background: activeProject.settings.background,
 			});
 
+			let nativeSession: NativeExportSession | null = null;
+			let nativeExportCompleted = false;
+			if (shouldUseNativeExport) {
+				nativeSession = await NativeExportSession.start();
+			}
 			const exporter = new SceneExporter({
 				width: canvasSize.width,
 				height: canvasSize.height,
 				fps: exportFps,
 				format,
 				quality,
-				shouldIncludeAudio: !!includeAudio,
+				shouldIncludeAudio: !!includeAudio && !shouldUseNativeExport,
 				audioBuffer: audioBuffer || undefined,
-				destination,
+				destination: nativeSession
+					? { writable: nativeSession.createVideoDestination() }
+					: destination,
 			});
 
 			exporter.on("progress", (progress) => {
-				const adjustedProgress = includeAudio
+				const adjustedProgress = includeAudio && !shouldUseNativeExport
 					? 0.05 + progress * 0.95
-					: progress;
+					: shouldUseNativeExport
+						? progress * 0.9
+						: progress;
 				onProgress?.({ progress: adjustedProgress });
 			});
 
@@ -221,11 +254,46 @@ export class RendererManager {
 				clearInterval(cancelInterval);
 
 				if (cancelled) {
+					await nativeSession?.cancel();
 					return { success: false, cancelled: true };
 				}
 
 				if (!output) {
+					await nativeSession?.cancel();
 					return { success: false, error: "Export failed to produce buffer" };
+				}
+
+				if (nativeSession && destination?.writeResponse) {
+					onProgress?.({ progress: 0.92 });
+					const clips: NativeAudioClip[] = nativeAudioClips
+						.filter((clip) => !clip.muted)
+						.map((clip) => ({
+							sourceKey: clip.sourceKey,
+							file: clip.file,
+							startTime: clip.startTime,
+							duration: clip.duration,
+							trimStart: clip.trimStart,
+							rate: clip.retime?.rate ?? 1,
+							maintainPitch: shouldMaintainPitch({
+								rate: clip.retime?.rate ?? 1,
+								maintainPitch: clip.retime?.maintainPitch,
+							}),
+							volume: clip.volume,
+						}));
+					const response = await nativeSession.finalize({
+						spec: {
+							durationSeconds: duration / TICKS_PER_SECOND,
+							sampleRate: 48_000,
+							clips,
+						},
+					});
+					if (!response.body) {
+						throw new Error("Native export response body is missing");
+					}
+					await destination.writeResponse(response.body);
+					nativeExportCompleted = true;
+					onProgress?.({ progress: 1 });
+					return { success: true, savedToFile: true };
 				}
 
 				return {
@@ -235,6 +303,9 @@ export class RendererManager {
 				};
 			} finally {
 				clearInterval(cancelInterval);
+				if (nativeSession && !nativeExportCompleted) {
+					await nativeSession.cancel();
+				}
 			}
 		} catch (error) {
 			console.error("Export failed:", error);

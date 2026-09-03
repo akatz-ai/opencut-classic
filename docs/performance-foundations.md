@@ -1,9 +1,9 @@
 # Performance foundations
 
 This fork keeps the Classic editor usable while the upstream Rust rewrite is
-still under construction. The first performance pass targets failures that
-scale with source duration or asset count before attempting larger proxy-media
-or native-engine work.
+still under construction. The performance work first targets failures that
+scale with source duration or asset count, then reduces the interactive
+bandwidth required by high-resolution and long-GOP sources.
 
 ## Upstream work reviewed
 
@@ -26,6 +26,17 @@ or native-engine work.
   Classic renderer supersedes that earlier draft.
 - No open PR directly addressed the GPU texture pool, current timeline
   subscription churn, or repeatable render diagnostics.
+- A second audit found no open PRs in the archived Classic repository. Current
+  OpenCut PRs
+  [`#794`](https://github.com/OpenCut-app/OpenCut/pull/794) and
+  [`#797`](https://github.com/OpenCut-app/OpenCut/pull/797) include a useful
+  server-conversion boundary, but buffer complete inputs and outputs and do not
+  implement proxy lifecycle or native export mixing. PR
+  [`#757`](https://github.com/OpenCut-app/OpenCut/pull/757) only negotiates
+  browser AAC support, while
+  [`#484`](https://github.com/OpenCut-app/OpenCut/pull/484) is an unconnected
+  Tauri shell. None supplied adaptive rendering, short-GOP proxies, bounded
+  native audio export, or the current FFmpeg engine.
 
 ## Changes in this pass
 
@@ -47,6 +58,46 @@ or native-engine work.
   `window.__renderPerfSnapshot()`.
 - Tests use a Node-targeted build of the real Rust/WASM module rather than a
   duplicated JavaScript mock.
+
+## Adaptive preview and proxies
+
+- The project canvas remains the logical coordinate system, while the WebGPU
+  preview surface is independently sized. `Auto` selects a stable quarter,
+  half, three-quarter, or full-resolution surface large enough for the fitted
+  viewport and device pixel ratio. The toolbar also exposes explicit Full,
+  1/2, and 1/4 modes.
+- Video decode sinks resize frames to the render surface before texture upload.
+  Cache keys include the requested decode size, so export and preview do not
+  accidentally share a low-resolution decoder.
+- New and existing video assets above 1280x720, above 30 fps, or unsupported by
+  WebCodecs are queued for proxy generation one at a time. Proxies are H.264,
+  at most 1280x720/30 fps, and use a 15-frame GOP for responsive seeking.
+- The native response streams directly into project-scoped OPFS storage. The
+  original remains the source of truth for audio and export; preview scene
+  construction swaps in the proxy when it is ready.
+- NVENC is preferred on this workstation and `libx264` is the fallback. Proxy
+  storage is quota-checked before the response is committed.
+
+## Native FFmpeg audio and MP4 finalization
+
+`apps/media-engine` and `rust/crates/media` provide the shared native FFmpeg
+boundary used by both proxies and export. The browser streams encoded video
+chunks and each unique audible source into a temporary export session. FFmpeg
+then applies trim, retime, pitch policy, delay, gain, mixing, limiting, and AAC
+encoding before copying the H.264 video into the final MP4. The final response
+streams into the selected file handle and the session is removed.
+
+This path avoids the previous full-duration stereo `AudioBuffer` and guarantees
+AAC-in-MP4 on Linux. It is selected for MP4 exports with audio when the native
+engine and File System Access destination are available. Animated volume still
+uses the browser path so its keyframe interpolation remains exact. WebM,
+non-local deployments, and browsers without the save-file API also retain the
+browser fallback.
+
+The native API is intentionally loopback-only and rejects cross-origin calls.
+Because Classic stores originals in browser OPFS, audio sources must currently
+stream once into the native session; a future native shell can replace that
+transfer with direct file-path access.
 
 ## Local Rust/WASM development
 
@@ -80,7 +131,7 @@ The Rust/WASM runtime reports its selected backend in
 `window.__opencutGpuBackend`. The verified value is
 `BrowserWebGpu:Bgra8Unorm`.
 
-## Initial measured baseline
+## Measured baselines
 
 The bounded smoke project contains two overlapping H.264/AAC 1280x720 clips,
 with a five-second 30 fps timeline. A production build exported all 150 frames
@@ -101,19 +152,45 @@ Production server memory settled near 206 MiB. The isolated Chrome application
 used about 707 MiB with both test clips loaded. Development-mode Next.js memory
 is not a useful editor baseline because compiler caches dominate it.
 
+The controlled 4K fixture is a 12-second, 3840x2160, 30 fps H.264/AAC source
+with a 240-frame GOP. Before adaptive rendering, interactive playback uploaded
+8.29 million source pixels per changing frame; texture synchronization averaged
+102 ms in the sampled playback window.
+
+The deterministic 60-frame preview benchmark on `akatz-arch` measured:
+
+| Configuration | Elapsed | Throughput | Texture sync mean | Resolve mean | Uploaded pixels/changing frame |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Full 4K original | 2.73 s | 22 fps | 39.6 ms | 5.2 ms | 8.47 M |
+| Auto 960x540 original | 0.77 s | 78 fps | 7.9 ms | 4.5 ms | 0.52 M |
+| Auto 960x540 proxy | 0.50 s | 120 fps | 6.3 ms | 1.6 ms | 0.52 M |
+
+The native engine generated the fixture's 1280x720 proxy in 1.36 seconds with
+NVENC, reducing it from 39.3 MiB to 9.2 MiB. A route-level export test produced
+a four-second H.264/AAC MP4 and removed its temporary session. A complete editor
+export then rendered and uploaded video, uploaded one audio source, finalized
+through native FFmpeg, and streamed a 4.4 MiB MP4 in 63 bounded response chunks.
+
+Three simultaneous full-frame proxy layers completed 60 deterministic frames
+in 1.57 seconds (38 fps average). Texture synchronization averaged 24.3 ms and
+reached 37.3 ms at p95. This makes lower-copy ingestion a useful future
+optimization for projects with several concurrent video layers, but it is no
+longer required for ordinary one-layer 30 fps editing.
+
 ## Deferred work
 
-1. Stream timeline audio mixing instead of creating one full-duration stereo
-   `AudioBuffer`. This is necessary before multi-hour exports are safe.
-2. Add adaptive preview resolution and proxy media for long-GOP and 4K sources.
-3. Investigate direct `VideoFrame`/external-texture ingestion to remove the
-   decoded-canvas upload from every frame.
-4. Add timeline viewport virtualization only after a large synthetic timeline
+1. Preserve animated-volume interpolation in the native FFmpeg filter graph so
+   those exports can also leave the full-buffer browser fallback.
+2. Investigate direct `VideoFrame`/external-texture ingestion when concurrent
+   full-frame video layers become a common workload; the one-layer path now has
+   comfortable headroom.
+3. Add timeline viewport virtualization only after a large synthetic timeline
    benchmark defines the current break-even point; drag, snap, and box-select
    behavior make premature virtualization risky.
-5. Add a native FFmpeg export path for guaranteed AAC-in-MP4 output on Linux.
+4. Move source transfer to native file-path references when Classic runs inside
+   a real desktop shell.
 
-The repository-wide ESLint command still reports archived-code debt outside
-this pass. Changed performance files lint clean, TypeScript passes, the
-optimized Next.js build succeeds, all 228 Bun tests pass, and the Rust workspace
-tests pass.
+The repository-wide ESLint command still reports 106 errors and 16 warnings in
+archived code outside this pass. Changed performance files lint clean,
+TypeScript passes, the optimized Next.js build succeeds, all 234 Bun tests pass,
+and all 16 Rust workspace tests pass.

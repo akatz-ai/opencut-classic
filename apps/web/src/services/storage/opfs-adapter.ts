@@ -20,7 +20,7 @@ export class OPFSAdapter implements StorageAdapter<File> {
 			const fileHandle = await directory.getFileHandle(key);
 			return await fileHandle.getFile();
 		} catch (error) {
-			if ((error as Error).name === "NotFoundError") {
+			if (isNotFoundError(error)) {
 				return null;
 			}
 			throw error;
@@ -42,12 +42,32 @@ export class OPFSAdapter implements StorageAdapter<File> {
 		await writable.close();
 	}
 
+	async setStream({
+		key,
+		stream,
+	}: {
+		key: string;
+		stream: ReadableStream<Uint8Array>;
+	}): Promise<File> {
+		const directory = await this.getDirectory();
+		const fileHandle = await directory.getFileHandle(key, { create: true });
+		const writable = await fileHandle.createWritable();
+		try {
+			await stream.pipeTo(writable);
+		} catch (error) {
+			await writable.abort().catch(() => undefined);
+			await directory.removeEntry(key).catch(() => undefined);
+			throw error;
+		}
+		return await fileHandle.getFile();
+	}
+
 	async remove(key: string): Promise<void> {
 		try {
 			const directory = await this.getDirectory();
 			await directory.removeEntry(key);
 		} catch (error) {
-			if ((error as Error).name !== "NotFoundError") {
+			if (!isNotFoundError(error)) {
 				throw error;
 			}
 		}
@@ -76,4 +96,13 @@ export class OPFSAdapter implements StorageAdapter<File> {
 	static isSupported(): boolean {
 		return "storage" in navigator && "getDirectory" in navigator.storage;
 	}
+}
+
+function isNotFoundError(error: unknown): boolean {
+	return (
+		typeof error === "object" &&
+		error !== null &&
+		"name" in error &&
+		error.name === "NotFoundError"
+	);
 }

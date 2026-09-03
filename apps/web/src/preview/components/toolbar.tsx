@@ -22,9 +22,13 @@ import {
 } from "@/components/ui/select";
 import { PREVIEW_ZOOM_PRESETS } from "@/preview/zoom";
 import { usePreviewViewport } from "./preview-viewport";
-import { GridPopover } from "./guide-popover";
 import { usePreviewStore } from "@/preview/preview-store";
 import type { MediaTime } from "@/wasm";
+import {
+	PREVIEW_RESOLUTION_MODES,
+	isPreviewResolutionMode,
+	type PreviewResolutionMode,
+} from "@/preview/adaptive-resolution";
 
 export function PreviewToolbar({
 	onToggleFullscreen,
@@ -36,6 +40,7 @@ export function PreviewToolbar({
 			<TimecodeDisplay />
 			<PlayPauseButton />
 			<div className="justify-self-end flex items-center gap-2.5">
+				<PreviewResolutionSelect />
 				<ZoomSelect />
 				<Separator orientation="vertical" className="h-4" />
 				{/* v0.4.0 */}
@@ -56,6 +61,41 @@ export function PreviewToolbar({
 				</Button>
 			</div>
 		</div>
+	);
+}
+
+const PREVIEW_RESOLUTION_LABELS: Record<PreviewResolutionMode, string> = {
+	auto: "Auto",
+	full: "Full",
+	half: "1/2",
+	quarter: "1/4",
+};
+
+function PreviewResolutionSelect() {
+	const mode = usePreviewStore((state) => state.resolutionMode);
+	const setMode = usePreviewStore((state) => state.setResolutionMode);
+
+	return (
+		<Select
+			value={mode}
+			onValueChange={(value) => {
+				if (isPreviewResolutionMode(value)) setMode(value);
+			}}
+		>
+			<SelectTrigger
+				className="tabular-nums"
+				aria-label="Preview resolution"
+			>
+				{PREVIEW_RESOLUTION_LABELS[mode]}
+			</SelectTrigger>
+			<SelectContent>
+				{PREVIEW_RESOLUTION_MODES.map((value) => (
+					<SelectItem key={value} value={value}>
+						{PREVIEW_RESOLUTION_LABELS[value]}
+					</SelectItem>
+				))}
+			</SelectContent>
+		</Select>
 	);
 }
 

@@ -45,33 +45,40 @@ export class VideoCache {
 		mediaId,
 		file,
 		time,
+		maxSourceSize,
 	}: {
 		mediaId: string;
 		file: File;
 		time: number;
+		maxSourceSize?: number;
 	}): Promise<WrappedCanvas | null> {
+		const sinkKey = this.getSinkKey({ mediaId, maxSourceSize });
 		incrementCounter({
-			name: this.sinks.has(mediaId)
+			name: this.sinks.has(sinkKey)
 				? "videoSinkCacheHit"
 				: "videoSinkCacheMiss",
 		});
-		await this.ensureSink({ mediaId, file });
+		await this.ensureSink({
+			mediaId: sinkKey,
+			file,
+			maxSourceSize,
+		});
 
-		const sinkData = this.sinks.get(mediaId);
+		const sinkData = this.sinks.get(sinkKey);
 		if (!sinkData) return null;
 
-		const generation = (this.seekGenerations.get(mediaId) ?? 0) + 1;
-		this.seekGenerations.set(mediaId, generation);
+		const generation = (this.seekGenerations.get(sinkKey) ?? 0) + 1;
+		this.seekGenerations.set(sinkKey, generation);
 
-		const previous = this.frameChain.get(mediaId) ?? Promise.resolve();
+		const previous = this.frameChain.get(sinkKey) ?? Promise.resolve();
 		const current = previous.then(() => {
-			if (this.seekGenerations.get(mediaId) !== generation) {
+			if (this.seekGenerations.get(sinkKey) !== generation) {
 				return sinkData.currentFrame ?? null;
 			}
 			return this.resolveFrame({ sinkData, time });
 		});
 		this.frameChain.set(
-			mediaId,
+			sinkKey,
 			current.catch(() => {}),
 		);
 		return current;
@@ -258,9 +265,11 @@ export class VideoCache {
 	private async ensureSink({
 		mediaId,
 		file,
+		maxSourceSize,
 	}: {
 		mediaId: string;
 		file: File;
+		maxSourceSize?: number;
 	}): Promise<void> {
 		if (this.sinks.has(mediaId)) return;
 
@@ -269,7 +278,7 @@ export class VideoCache {
 			return;
 		}
 
-		const initPromise = this.initializeSink({ mediaId, file });
+		const initPromise = this.initializeSink({ mediaId, file, maxSourceSize });
 		this.initPromises.set(mediaId, initPromise);
 
 		try {
@@ -281,9 +290,11 @@ export class VideoCache {
 	private async initializeSink({
 		mediaId,
 		file,
+		maxSourceSize,
 	}: {
 		mediaId: string;
 		file: File;
+		maxSourceSize?: number;
 	}): Promise<void> {
 		const input = new Input({
 			source: new BlobSource(file),
@@ -301,9 +312,19 @@ export class VideoCache {
 				throw new Error("Video codec not supported for decoding");
 			}
 
+			const sourceWidth = videoTrack.displayWidth;
+			const sourceHeight = videoTrack.displayHeight;
+			const sourceLongSide = Math.max(sourceWidth, sourceHeight);
+			const scale = maxSourceSize
+				? Math.min(1, maxSourceSize / sourceLongSide)
+				: 1;
+			const targetWidth = Math.max(2, Math.round(sourceWidth * scale));
+			const targetHeight = Math.max(2, Math.round(sourceHeight * scale));
 			const sink = new CanvasSink(videoTrack, {
 				poolSize: 3,
 				fit: "contain",
+				width: targetWidth,
+				height: targetHeight,
 			});
 
 			this.sinks.set({
@@ -327,11 +348,18 @@ export class VideoCache {
 	}
 
 	clearVideo({ mediaId }: { mediaId: string }): void {
-		this.sinks.delete(mediaId);
-
-		this.initPromises.delete(mediaId);
-		this.frameChain.delete(mediaId);
-		this.seekGenerations.delete(mediaId);
+		for (const key of Array.from(this.sinks.keys())) {
+			if (
+				key === mediaId ||
+				key.startsWith(`${mediaId}@`) ||
+				key.startsWith(`${mediaId}:proxy`)
+			) {
+				this.sinks.delete(key);
+				this.initPromises.delete(key);
+				this.frameChain.delete(key);
+				this.seekGenerations.delete(key);
+			}
+		}
 	}
 
 	clearAll(): void {
@@ -350,6 +378,18 @@ export class VideoCache {
 				(s) => s.currentFrame,
 			).length,
 		};
+	}
+
+	private getSinkKey({
+		mediaId,
+		maxSourceSize,
+	}: {
+		mediaId: string;
+		maxSourceSize?: number;
+	}): string {
+		return maxSourceSize
+			? `${mediaId}@${Math.max(2, Math.round(maxSourceSize))}`
+			: mediaId;
 	}
 }
 

@@ -1,0 +1,13 @@
+[package]
+name = "opencut-media-engine"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "opencut-media-engine"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+media = { path = "../../rust/crates/media" }
+serde_json = "1"

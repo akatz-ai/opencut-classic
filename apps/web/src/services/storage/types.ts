@@ -1,4 +1,4 @@
-import type { MediaType } from "@/media/types";
+import type { MediaProxyMetadata, MediaType } from "@/media/types";
 import type {
 	TProject,
 	TProjectMetadata,
@@ -25,6 +25,9 @@ export interface MediaAssetData {
 	duration?: number;
 	fps?: number;
 	hasAudio?: boolean;
+	codec?: string;
+	canDecode?: boolean;
+	proxy?: MediaProxyMetadata;
 	ephemeral?: boolean;
 	thumbnailUrl?: string;
 }
