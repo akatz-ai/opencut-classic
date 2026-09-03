@@ -518,6 +518,18 @@ impl GpuContext {
     ) -> wgpu::Texture {
         let texture = self.create_render_texture(width, height, label);
 
+        self.update_offscreen_canvas_texture(canvas, &texture, width, height);
+        texture
+    }
+
+    #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
+    pub fn update_offscreen_canvas_texture(
+        &self,
+        canvas: &wgpu::web_sys::OffscreenCanvas,
+        texture: &wgpu::Texture,
+        width: u32,
+        height: u32,
+    ) {
         if self.supports_external_texture_copies {
             self.queue.copy_external_image_to_texture(
                 &wgpu::CopyExternalImageSourceInfo {
@@ -581,8 +593,6 @@ impl GpuContext {
                 },
             );
         }
-
-        texture
     }
 
     #[cfg(all(feature = "wasm", target_arch = "wasm32"))]

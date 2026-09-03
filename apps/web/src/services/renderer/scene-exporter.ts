@@ -50,6 +50,7 @@ export type SceneExporterEvents = {
 
 export class SceneExporter extends EventEmitter<SceneExporterEvents> {
 	private renderer: CanvasRenderer;
+	private encodingCanvas: OffscreenCanvas;
 	private format: ExportFormat;
 	private quality: ExportQuality;
 	private shouldIncludeAudio: boolean;
@@ -74,6 +75,7 @@ export class SceneExporter extends EventEmitter<SceneExporterEvents> {
 			height,
 			fps,
 		});
+		this.encodingCanvas = new OffscreenCanvas(width, height);
 
 		this.format = format;
 		this.quality = quality;
@@ -112,7 +114,10 @@ export class SceneExporter extends EventEmitter<SceneExporterEvents> {
 			target,
 		});
 
-		const videoSource = new CanvasSource(this.renderer.getOutputCanvas(), {
+		// Encode from a stable 2D canvas rather than reading the WebGPU surface
+		// directly. The copy synchronizes presentation and prevents WebCodecs from
+		// racing an uninitialized/shared compositor texture under a tight export loop.
+		const videoSource = new CanvasSource(this.encodingCanvas, {
 			codec: this.format === "webm" ? "vp9" : "avc",
 			bitrate: qualityMap[this.quality],
 		});
@@ -140,51 +145,65 @@ export class SceneExporter extends EventEmitter<SceneExporterEvents> {
 			output.addAudioTrack(audioSource);
 		}
 
-		await output.start();
+		try {
+			await output.start();
 
-		if (audioSource && this.audioBuffer) {
-			await audioSource.add(this.audioBuffer);
-			audioSource.close();
-		}
+			if (audioSource && this.audioBuffer) {
+				await audioSource.add(this.audioBuffer);
+				audioSource.close();
+			}
 
-		for (let i = 0; i < frameCount; i++) {
+			for (let i = 0; i < frameCount; i++) {
+				if (this.isCancelled) {
+					await output.cancel();
+					this.emit("cancelled");
+					return null;
+				}
+
+				const timeTicks = i * ticksPerFrame;
+				const timeSeconds = mediaTimeToSeconds({ time: timeTicks });
+				await this.renderer.renderToCanvas({
+					node: rootNode,
+					time: timeTicks,
+					targetCanvas: this.encodingCanvas,
+				});
+				await videoSource.add(timeSeconds, 1 / fpsFloat);
+
+				this.emit("progress", i / frameCount);
+			}
+
 			if (this.isCancelled) {
 				await output.cancel();
 				this.emit("cancelled");
 				return null;
 			}
 
-			const timeTicks = i * ticksPerFrame;
-			const timeSeconds = mediaTimeToSeconds({ time: timeTicks });
-			await this.renderer.render({ node: rootNode, time: timeTicks });
-			await videoSource.add(timeSeconds, 1 / fpsFloat);
+			videoSource.close();
+			await output.finalize();
+			this.emit("progress", 1);
 
-			this.emit("progress", i / frameCount);
+			const buffer =
+				target instanceof BufferTarget
+					? (target.buffer ?? undefined)
+					: undefined;
+			if (target instanceof BufferTarget && !buffer) {
+				this.emit("error", new Error("Failed to export video"));
+				return null;
+			}
+
+			if (buffer) {
+				this.emit("complete", buffer);
+			}
+			return {
+				buffer,
+				savedToFile: target instanceof StreamTarget,
+			};
+		} catch (error) {
+			// MediaBunny/WebCodecs may report encoder failures asynchronously. Always
+			// cancel the output so its encoder and stream resources are released before
+			// the caller offers a retry.
+			await output.cancel().catch(() => undefined);
+			throw error;
 		}
-
-		if (this.isCancelled) {
-			await output.cancel();
-			this.emit("cancelled");
-			return null;
-		}
-
-		videoSource.close();
-		await output.finalize();
-		this.emit("progress", 1);
-
-		const buffer =
-			target instanceof BufferTarget ? (target.buffer ?? undefined) : undefined;
-		if (target instanceof BufferTarget && !buffer) {
-			this.emit("error", new Error("Failed to export video"));
-			return null;
-		}
-
-		if (buffer) {
-			this.emit("complete", buffer);
-		}
-		return {
-			buffer,
-			savedToFile: target instanceof StreamTarget,
-		};
 	}
 }

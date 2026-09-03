@@ -124,6 +124,16 @@ pub fn upload_texture(options: JsValue) -> Result<(), JsValue> {
                 ));
             };
 
+            if let Some(texture) = runtime.compositor.texture(&id)
+                && texture.width() == width
+                && texture.height() == height
+            {
+                gpu_runtime
+                    .context
+                    .update_offscreen_canvas_texture(&source, texture, width, height);
+                return Ok(());
+            }
+
             let texture = import_canvas_texture(
                 &gpu_runtime.context,
                 &source,

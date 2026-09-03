@@ -199,6 +199,28 @@ canvas per texture. On the exact recovered project, 600 deterministic frames
 left descriptor count unchanged, and 400 real pointer-scrub seeks changed it
 from 102 to 97 with no GPU allocation failures.
 
+### Full-resolution export texture regression
+
+A 681.3167-second, 2560x1440/60 fps project exposed a separate WebGPU export
+leak. Its timeline contained 24 main clips plus three muted 4K video overlays
+and two text overlays. Every changing decoded canvas caused
+`uploadTexture` to allocate a new WebGPU texture even when the texture ID and
+dimensions were unchanged. During a High MP4 export, the OpenCut Chrome GPU
+process reached roughly 5.4 GiB and Chromium began reporting
+`Error creating wgpu::Texture`, uninitialized shared-image reads, and an
+encoding failure.
+
+External uploads now update the existing texture when its ID and dimensions
+match. The encoder also reads from a stable 2D staging canvas rather than the
+WebGPU presentation surface, and an encoder error always cancels the MediaBunny
+output to release its resources before retry.
+
+The same project completed a full High MP4 export in about 17 minutes. OpenCut
+GPU memory remained between 1.1 and 1.25 GiB during rendering and settled below
+1 GiB afterward, with no texture-allocation or shared-image errors. The
+353,118,710-byte result contains 2560x1440 yuv420p H.264 at 60 fps and stereo
+48 kHz AAC; both stream and container durations are 681.3167 seconds.
+
 ## Deferred work
 
 1. Preserve animated-volume interpolation in the native FFmpeg filter graph so

@@ -108,11 +108,14 @@ export class CanvasRenderer {
 	}: {
 		node: AnyBaseNode;
 		time: number;
-		targetCanvas: HTMLCanvasElement;
+		targetCanvas: HTMLCanvasElement | OffscreenCanvas;
 	}) {
 		await this.render({ node, time, completeFrame: false });
 
-		const ctx = targetCanvas.getContext("2d");
+		const ctx =
+			targetCanvas instanceof OffscreenCanvas
+				? targetCanvas.getContext("2d")
+				: targetCanvas.getContext("2d");
 		if (!ctx) {
 			throw new Error("Failed to get target canvas context");
 		}
