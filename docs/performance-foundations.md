@@ -112,20 +112,25 @@ bun run build:web
 With the flag unset, the application continues to resolve the published
 `opencut-wasm` package.
 
-On the `akatz-arch` NVIDIA/Niri workstation, the verified Chrome launch needs
-X11 presentation plus explicit Vulkan/WebGPU enablement:
+On the `akatz-arch` NVIDIA/Niri workstation, the verified installed-PWA launch
+uses X11 presentation plus Chromium's shipped Vulkan/WebGPU features:
 
 ```sh
 google-chrome-stable \
   --user-data-dir=/home/akatz/.local/share/opencut-chrome \
-  --app=http://127.0.0.1:3003/projects \
+  --profile-directory=Default \
+  --app-id=<installed-opencut-app-id> \
   --ozone-platform=x11 \
-  --enable-unsafe-webgpu \
-  --enable-features=UseOzonePlatform,VaapiVideoDecoder,VaapiVideoEncoder,Vulkan \
+  --enable-features=UseOzonePlatform,VaapiVideoDecoder,VaapiVideoEncoder,Vulkan,WebGPUService,WebGPU \
   --disable-backgrounding-occluded-windows \
   --disable-background-timer-throttling \
   --disable-renderer-backgrounding
 ```
+
+`WebGPUService,WebGPU` keeps the measured hardware backend without the warning
+banner caused by `--enable-unsafe-webgpu`. The PWA manifest opts into Window
+Controls Overlay, and the editor header reserves the platform-reported titlebar
+insets so its controls do not collide with minimize, maximize, or close.
 
 The Rust/WASM runtime reports its selected backend in
 `window.__opencutGpuBackend`. The verified value is

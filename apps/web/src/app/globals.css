@@ -3,6 +3,35 @@
 /* Custom variant for dark mode */
 @custom-variant dark (&:where(.dark, .dark *));
 
+/*
+  Installed desktop PWAs can place the editor header in the system title-bar
+  region. Keep interactive controls out of the draggable area and reserve an
+  extra 12px around whichever side contains the native window buttons.
+*/
+@media (display-mode: window-controls-overlay) {
+  .editor-window-titlebar {
+    height: max(3.4rem, env(titlebar-area-height, 3.4rem));
+    padding-left: max(
+      0.75rem,
+      calc(env(titlebar-area-x, 0px) + 0.75rem)
+    );
+    padding-right: max(
+      0.75rem,
+      calc(
+        100vw - env(titlebar-area-x, 0px) -
+          env(titlebar-area-width, 100vw) + 0.75rem
+      )
+    );
+    -webkit-app-region: drag;
+    app-region: drag;
+  }
+
+  .editor-window-titlebar :is(button, a, input, [role="button"], [role="menuitem"]) {
+    -webkit-app-region: no-drag;
+    app-region: no-drag;
+  }
+}
+
 /* Plugins */
 @plugin "@tailwindcss/typography";
 @plugin "tailwindcss-animate";
