@@ -85,6 +85,74 @@ export function buildSourceWaveformSummary({
 	};
 }
 
+/**
+ * Builds a waveform summary incrementally from decoded audio chunks.
+ *
+ * Keeping only the current chunk and the downsampled peaks in memory avoids
+ * materializing an entire source file and its decoded PCM just to draw a
+ * waveform. This is especially important for long video sources.
+ */
+export async function buildStreamingWaveformSummary({
+	sourceKey,
+	chunks,
+	bucketSize = DEFAULT_SOURCE_WAVEFORM_BUCKET_SIZE,
+}: {
+	sourceKey: string;
+	chunks: AsyncIterable<AudioBuffer>;
+	bucketSize?: number;
+}): Promise<SourceWaveformSummary> {
+	const safeBucketSize = Math.max(1, Math.floor(bucketSize));
+	const amplitudes: number[] = [];
+	let sampleRate = 0;
+	let totalSamples = 0;
+	let bucketPeak = 0;
+	let samplesInBucket = 0;
+
+	for await (const chunk of chunks) {
+		if (sampleRate === 0) {
+			sampleRate = chunk.sampleRate;
+		} else if (chunk.sampleRate !== sampleRate) {
+			throw new Error(
+				`Waveform chunk sample rate changed from ${sampleRate} to ${chunk.sampleRate}`,
+			);
+		}
+
+		const channelData = Array.from(
+			{ length: chunk.numberOfChannels },
+			(_, channel) => chunk.getChannelData(channel),
+		);
+
+		for (let sampleIndex = 0; sampleIndex < chunk.length; sampleIndex++) {
+			let samplePeak = 0;
+			for (const channel of channelData) {
+				samplePeak = Math.max(samplePeak, Math.abs(channel[sampleIndex] ?? 0));
+			}
+
+			bucketPeak = Math.max(bucketPeak, samplePeak);
+			samplesInBucket += 1;
+			totalSamples += 1;
+
+			if (samplesInBucket === safeBucketSize) {
+				amplitudes.push(bucketPeak);
+				bucketPeak = 0;
+				samplesInBucket = 0;
+			}
+		}
+	}
+
+	if (samplesInBucket > 0) {
+		amplitudes.push(bucketPeak);
+	}
+
+	return {
+		sourceKey,
+		sampleRate,
+		totalSamples,
+		bucketSize: safeBucketSize,
+		amplitudes: Float32Array.from(amplitudes),
+	};
+}
+
 export function buildWaveformSampleBuckets({
 	clipLeftPx,
 	clipRightPx,

@@ -50,7 +50,15 @@ export class CanvasRenderer {
 		this.context = surface.context;
 	}
 
-	async render({ node, time }: { node: AnyBaseNode; time: number }) {
+	async render({
+		node,
+		time,
+		completeFrame = true,
+	}: {
+		node: AnyBaseNode;
+		time: number;
+		completeFrame?: boolean;
+	}) {
 		await measureSpanAsync({
 			name: "resolve",
 			fn: () => resolveRenderTree({ node, renderer: this, time }),
@@ -71,6 +79,9 @@ export class CanvasRenderer {
 			name: "renderFrame",
 			fn: () => wasmCompositor.render(frame),
 		});
+		if (completeFrame) {
+			onRenderPerfFrameComplete();
+		}
 	}
 
 	async renderToCanvas({
@@ -82,7 +93,7 @@ export class CanvasRenderer {
 		time: number;
 		targetCanvas: HTMLCanvasElement;
 	}) {
-		await this.render({ node, time });
+		await this.render({ node, time, completeFrame: false });
 
 		const ctx = targetCanvas.getContext("2d");
 		if (!ctx) {

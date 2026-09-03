@@ -1,10 +1,24 @@
 "use client";
 
+import { Input, ALL_FORMATS, BlobSource, AudioBufferSink } from "mediabunny";
 import { createAudioContext } from "@/media/audio";
 import {
 	buildSourceWaveformSummary,
+	buildStreamingWaveformSummary,
 	type SourceWaveformSummary,
 } from "@/media/waveform-summary";
+
+async function* mapAsync<TInput, TOutput>({
+	source,
+	transform,
+}: {
+	source: AsyncIterable<TInput>;
+	transform: (value: TInput) => TOutput;
+}): AsyncGenerator<TOutput, void, unknown> {
+	for await (const value of source) {
+		yield transform(value);
+	}
+}
 
 interface GetSourceWaveformSummaryArgs {
 	sourceKey: string;
@@ -59,27 +73,63 @@ export class WaveformCache {
 			return buildSourceWaveformSummary({ sourceKey, buffer: audioBuffer });
 		}
 
-		let arrayBuffer: ArrayBuffer | null = null;
 		if (sourceFile) {
-			arrayBuffer = await sourceFile.arrayBuffer();
-		} else if (audioUrl) {
-			const response = await fetch(audioUrl);
-			if (!response.ok) {
-				throw new Error(`Failed to fetch waveform source: ${response.status}`);
-			}
-			arrayBuffer = await response.arrayBuffer();
+			return this.buildSummaryFromFile({ sourceKey, file: sourceFile });
 		}
 
-		if (!arrayBuffer) {
+		if (!audioUrl) {
 			throw new Error(`No waveform source available for ${sourceKey}`);
 		}
 
+		const response = await fetch(audioUrl);
+		if (!response.ok) {
+			throw new Error(`Failed to fetch waveform source: ${response.status}`);
+		}
+		const arrayBuffer = await response.arrayBuffer();
+
 		const audioContext = createAudioContext();
 		try {
-			const buffer = await audioContext.decodeAudioData(arrayBuffer.slice(0));
+			const buffer = await audioContext.decodeAudioData(arrayBuffer);
 			return buildSourceWaveformSummary({ sourceKey, buffer });
 		} finally {
 			void audioContext.close();
+		}
+	}
+
+	private async buildSummaryFromFile({
+		sourceKey,
+		file,
+	}: {
+		sourceKey: string;
+		file: File;
+	}): Promise<SourceWaveformSummary> {
+		const input = new Input({
+			source: new BlobSource(file),
+			formats: ALL_FORMATS,
+		});
+
+		try {
+			const audioTrack = await input.getPrimaryAudioTrack();
+			if (!audioTrack) {
+				return {
+					sourceKey,
+					sampleRate: 0,
+					totalSamples: 0,
+					bucketSize: 1,
+					amplitudes: new Float32Array(0),
+				};
+			}
+
+			const sink = new AudioBufferSink(audioTrack);
+			return await buildStreamingWaveformSummary({
+				sourceKey,
+				chunks: mapAsync({
+					source: sink.buffers(0),
+					transform: ({ buffer }) => buffer,
+				}),
+			});
+		} finally {
+			input.dispose();
 		}
 	}
 }

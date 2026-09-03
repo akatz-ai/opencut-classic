@@ -22,6 +22,8 @@ bun.lockb
 .open-next
 
 target/
+rust/wasm/pkg/
+rust/wasm/pkg-node/
 
 .cargo-tools/
 

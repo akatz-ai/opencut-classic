@@ -1,4 +1,5 @@
 import type { FrameRate } from "opencut-wasm";
+import type { StreamTargetChunk } from "mediabunny";
 import { EXPORT_MIME_TYPES } from "./mime-types";
 
 export const EXPORT_QUALITY_VALUES = [
@@ -20,9 +21,14 @@ export interface ExportOptions {
 	includeAudio?: boolean;
 }
 
+export interface ExportDestination {
+	writable: WritableStream<StreamTargetChunk>;
+}
+
 export interface ExportResult {
 	success: boolean;
 	buffer?: ArrayBuffer;
+	savedToFile?: boolean;
 	error?: string;
 	cancelled?: boolean;
 }
@@ -47,6 +53,60 @@ export function getExportFileExtension({
 	format: ExportFormat;
 }): string {
 	return `.${format}`;
+}
+
+type SaveFilePickerWindow = Window & {
+	showSaveFilePicker?: (options: {
+		suggestedName?: string;
+		types?: Array<{
+			description?: string;
+			accept: Record<string, string[]>;
+		}>;
+	}) => Promise<FileSystemFileHandle>;
+};
+
+export type ExportDestinationSelection =
+	| { status: "selected"; destination: ExportDestination }
+	| { status: "cancelled" }
+	| { status: "unavailable" };
+
+export async function selectExportDestination({
+	filename,
+	mimeType,
+	extension,
+}: {
+	filename: string;
+	mimeType: string;
+	extension: string;
+}): Promise<ExportDestinationSelection> {
+	const picker = (window as SaveFilePickerWindow).showSaveFilePicker;
+	if (!picker) {
+		return { status: "unavailable" };
+	}
+
+	try {
+		const handle = await picker.call(window, {
+			suggestedName: filename,
+			types: [
+				{
+					description: `${extension.slice(1).toUpperCase()} video`,
+					accept: { [mimeType]: [extension] },
+				},
+			],
+		});
+		const writable = await handle.createWritable();
+		return {
+			status: "selected",
+			destination: {
+				writable: writable as WritableStream<StreamTargetChunk>,
+			},
+		};
+	} catch (error) {
+		if (error instanceof DOMException && error.name === "AbortError") {
+			return { status: "cancelled" };
+		}
+		throw error;
+	}
 }
 
 export function downloadBuffer({

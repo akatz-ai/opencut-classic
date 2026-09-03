@@ -1,12 +1,11 @@
 import type { EditorCore } from "@/core";
 import type { RootNode } from "@/services/renderer/nodes/root-node";
-import type { ExportOptions, ExportResult } from "@/export";
+import type { ExportDestination, ExportOptions, ExportResult } from "@/export";
 import { CanvasRenderer } from "@/services/renderer/canvas-renderer";
 import { SceneExporter } from "@/services/renderer/scene-exporter";
 import { buildScene } from "@/services/renderer/scene-builder";
 import { createTimelineAudioBuffer } from "@/media/audio";
 import { formatTimecode } from "opencut-wasm";
-import { frameRateToFloat } from "@/fps/utils";
 import { downloadBlob } from "@/utils/browser";
 
 type SnapshotResult =
@@ -122,7 +121,10 @@ export class RendererManager {
 				return { success: false, error: "Failed to create image" };
 			}
 
-			const timecode = formatTimecode({ time: renderTime, rate: fps })!.replace(/:/g, "-");
+			const timecode = formatTimecode({ time: renderTime, rate: fps })!.replace(
+				/:/g,
+				"-",
+			);
 			const safeName =
 				activeProject.metadata.name.replace(/[<>:"/\\|?*]/g, "-").trim() ||
 				"snapshot";
@@ -140,10 +142,12 @@ export class RendererManager {
 
 	async exportProject({
 		options,
+		destination,
 		onProgress,
 		onCancel,
 	}: {
 		options: ExportOptions;
+		destination?: ExportDestination;
 		onProgress?: ({ progress }: { progress: number }) => void;
 		onCancel?: () => boolean;
 	}): Promise<ExportResult> {
@@ -192,6 +196,7 @@ export class RendererManager {
 				quality,
 				shouldIncludeAudio: !!includeAudio,
 				audioBuffer: audioBuffer || undefined,
+				destination,
 			});
 
 			exporter.on("progress", (progress) => {
@@ -212,20 +217,21 @@ export class RendererManager {
 			const cancelInterval = setInterval(checkCancel, 100);
 
 			try {
-				const buffer = await exporter.export({ rootNode: scene });
+				const output = await exporter.export({ rootNode: scene });
 				clearInterval(cancelInterval);
 
 				if (cancelled) {
 					return { success: false, cancelled: true };
 				}
 
-				if (!buffer) {
+				if (!output) {
 					return { success: false, error: "Export failed to produce buffer" };
 				}
 
 				return {
 					success: true,
-					buffer,
+					buffer: output.buffer,
+					savedToFile: output.savedToFile,
 				};
 			} finally {
 				clearInterval(cancelInterval);

@@ -8,6 +8,7 @@
   "scripts": {
     "build:tools": "turbo run build --filter=@opencut/tools",
     "build:wasm": "wasm-pack build rust/wasm --target bundler --out-dir pkg",
+    "build:wasm:test": "wasm-pack build rust/wasm --target nodejs --out-dir pkg-node --dev",
     "build:web": "turbo run build --filter=@opencut/web",
     "deploy:web": "turbo run deploy --filter=@opencut/web",
     "dev:tools": "turbo run dev --filter=@opencut/tools",
@@ -20,7 +21,7 @@
     "preview:web": "turbo run preview --filter=@opencut/web",
     "publish:wasm": "bun run build:wasm && npm publish rust/wasm/pkg --access public",
     "start:tools": "turbo run start --filter=@opencut/tools",
-    "test": "bun test"
+    "test": "bun run build:wasm:test && bun test --preload ./apps/web/test/setup.mjs"
   },
   "dependencies": {
     "@types/react": "^19.2.10",

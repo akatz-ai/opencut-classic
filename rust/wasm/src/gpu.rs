@@ -62,6 +62,17 @@ pub async fn initialize_gpu() -> Result<(), JsValue> {
     Ok(())
 }
 
+#[wasm_bindgen(js_name = getGpuBackend)]
+pub fn get_gpu_backend() -> Result<String, JsValue> {
+    with_gpu_runtime(|runtime| {
+        Ok(format!(
+            "{:?}:{:?}",
+            runtime.context.adapter().get_info().backend,
+            runtime.context.texture_format()
+        ))
+    })
+}
+
 pub(crate) fn with_gpu_runtime<T>(
     action: impl FnOnce(&GpuRuntime) -> Result<T, JsValue>,
 ) -> Result<T, JsValue> {

@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext } from "react";
+import { createContext, memo, useContext } from "react";
 import { useEditor } from "@/editor/use-editor";
 import { useAssetsPanelStore } from "@/components/editor/panels/assets/assets-panel-store";
 import { AudioWaveform, WAVEFORM_GAIN_SAMPLE_COUNT } from "./audio-waveform";
@@ -47,7 +47,10 @@ import {
 	getSourceAudioActionLabel,
 	isSourceAudioSeparated,
 } from "@/timeline/audio-separation";
-import { buildWaveformGainSamples, isElementMuted } from "@/timeline/audio-state";
+import {
+	buildWaveformGainSamples,
+	isElementMuted,
+} from "@/timeline/audio-state";
 import { getTimelinePixelsPerSecond } from "@/timeline";
 import { buildWaveformSourceKey } from "@/media/waveform-summary";
 import { addMediaTime, type MediaTime, TICKS_PER_SECOND } from "@/wasm";
@@ -57,7 +60,6 @@ import {
 	type TActionWithOptionalArgs,
 	invokeAction,
 } from "@/actions";
-import { useElementSelection } from "@/timeline/hooks/element/use-element-selection";
 import { resolveStickerId } from "@/stickers";
 import { buildGraphicPreviewUrl } from "@/graphics";
 import Image from "next/image";
@@ -200,7 +202,6 @@ interface TimelineElementProps {
 	element: TimelineElementType;
 	track: TimelineTrack;
 	zoomLevel: number;
-	isSelected: boolean;
 	onResizeStart: (params: {
 		event: React.MouseEvent;
 		element: TimelineElementType;
@@ -219,11 +220,10 @@ interface TimelineElementProps {
 	isDropTarget?: boolean;
 }
 
-export function TimelineElement({
+function TimelineElementComponent({
 	element,
 	track,
 	zoomLevel,
-	isSelected,
 	onResizeStart,
 	onElementMouseDown,
 	onElementClick,
@@ -231,7 +231,16 @@ export function TimelineElement({
 	isDropTarget = false,
 }: TimelineElementProps) {
 	const mediaAssets = useEditor((e) => e.media.getAssets());
-	const { selectedElements } = useElementSelection();
+	const [selectedCount, isSelected] = useEditor((e) => {
+		const selectedElements = e.selection.getSelectedElements();
+		return [
+			selectedElements.length,
+			selectedElements.some(
+				(selected) =>
+					selected.elementId === element.id && selected.trackId === track.id,
+			),
+		] as const;
+	});
 	const requestRevealMedia = useAssetsPanelStore((s) => s.requestRevealMedia);
 	const { renderElement } = useElementPreview({
 		trackId: track.id,
@@ -247,11 +256,6 @@ export function TimelineElement({
 	}
 
 	const hasAudio = mediaSupportsAudio({ media: mediaAsset });
-
-	const isCurrentElementSelected = selectedElements.some(
-		(selected) =>
-			selected.elementId === element.id && selected.trackId === track.id,
-	);
 
 	const isDragging = dragView.kind === "dragging";
 	const dragTimeOffset = isDragging
@@ -337,8 +341,8 @@ export function TimelineElement({
 
 	const isMuted = canElementHaveAudio(element) && isElementMuted({ element });
 	const canToggleCurrentSourceAudio =
-		selectedElements.length === 1 &&
-		isCurrentElementSelected &&
+		selectedCount === 1 &&
+		isSelected &&
 		canToggleSourceAudio(element, mediaAsset);
 	const sourceAudioLabel =
 		element.type === "video"
@@ -430,7 +434,7 @@ export function TimelineElement({
 						Split
 					</ActionMenuItem>
 					<CopyMenuItem />
-					{selectedElements.length === 1 && (
+					{selectedCount === 1 && (
 						<ActionMenuItem
 							action="duplicate-selected"
 							icon={<HugeiconsIcon icon={Copy01Icon} />}
@@ -440,8 +444,8 @@ export function TimelineElement({
 					)}
 					{canElementHaveAudio(element) && hasAudio && (
 						<MuteMenuItem
-							isMultipleSelected={selectedElements.length > 1}
-							isCurrentElementSelected={isCurrentElementSelected}
+							isMultipleSelected={selectedCount > 1}
+							isCurrentElementSelected={isSelected}
 							isMuted={isMuted}
 						/>
 					)}
@@ -465,8 +469,8 @@ export function TimelineElement({
 					{canElementBeHidden(element) && (
 						<VisibilityMenuItem
 							element={element}
-							isMultipleSelected={selectedElements.length > 1}
-							isCurrentElementSelected={isCurrentElementSelected}
+							isMultipleSelected={selectedCount > 1}
+							isCurrentElementSelected={isSelected}
 						/>
 					)}
 					{hasKeyframes && (
@@ -480,7 +484,7 @@ export function TimelineElement({
 							{isExpanded ? "Collapse keyframes" : "Expand keyframes"}
 						</ContextMenuItem>
 					)}
-					{selectedElements.length === 1 && hasMediaId(element) && (
+					{selectedCount === 1 && hasMediaId(element) && (
 						<>
 							<ContextMenuItem
 								icon={<HugeiconsIcon icon={Search01Icon} />}
@@ -500,16 +504,18 @@ export function TimelineElement({
 					)}
 					<ContextMenuSeparator />
 					<DeleteMenuItem
-						isMultipleSelected={selectedElements.length > 1}
-						isCurrentElementSelected={isCurrentElementSelected}
+						isMultipleSelected={selectedCount > 1}
+						isCurrentElementSelected={isSelected}
 						elementType={element.type}
-						selectedCount={selectedElements.length}
+						selectedCount={selectedCount}
 					/>
 				</ContextMenuContent>
 			</ContextMenu>
 		</PixelsPerSecondContext.Provider>
 	);
 }
+
+export const TimelineElement = memo(TimelineElementComponent);
 
 function ElementInner({
 	element,
@@ -909,7 +915,9 @@ function TextElementContent({
 	return (
 		<div className="flex size-full items-center justify-start pl-2">
 			<span className="truncate text-xs text-white">
-				{typeof element.params.content === "string" ? element.params.content : ""}
+				{typeof element.params.content === "string"
+					? element.params.content
+					: ""}
 			</span>
 		</div>
 	);

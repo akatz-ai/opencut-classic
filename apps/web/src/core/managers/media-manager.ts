@@ -6,6 +6,7 @@ import { generateUUID } from "@/utils/id";
 import { videoCache } from "@/services/video-cache/service";
 import { waveformCache } from "@/services/waveform-cache/service";
 import { BatchCommand, RemoveMediaAssetCommand } from "@/commands";
+import { clearImageSourceCache } from "@/services/renderer/nodes/image-node";
 
 export class MediaManager {
 	private assets: MediaAsset[] = [];
@@ -73,11 +74,12 @@ export class MediaManager {
 						assetId: uniqueIds[0],
 					})
 				: new BatchCommand(
-						uniqueIds.map((id) =>
-							new RemoveMediaAssetCommand({
-								projectId,
-								assetId: id,
-							}),
+						uniqueIds.map(
+							(id) =>
+								new RemoveMediaAssetCommand({
+									projectId,
+									assetId: id,
+								}),
 						),
 					);
 
@@ -104,6 +106,7 @@ export class MediaManager {
 
 	async clearProjectMedia({ projectId }: { projectId: string }): Promise<void> {
 		waveformCache.clearAll();
+		clearImageSourceCache();
 
 		this.assets.forEach((asset) => {
 			if (asset.url) {
@@ -132,6 +135,7 @@ export class MediaManager {
 	clearAllAssets(): void {
 		videoCache.clearAll();
 		waveformCache.clearAll();
+		clearImageSourceCache();
 
 		this.assets.forEach((asset) => {
 			if (asset.url) {

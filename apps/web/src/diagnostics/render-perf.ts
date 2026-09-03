@@ -23,6 +23,12 @@ type CounterStats = {
 	frames: number;
 };
 
+export type RenderPerfReport = {
+	frames: number;
+	spans: Array<Record<string, number | string>>;
+	counters: Array<Record<string, number | string>>;
+};
+
 const FLUSH_EVERY = 60;
 
 const spans = new Map<string, SpanStats>();
@@ -34,6 +40,9 @@ let framesSinceFlush = 0;
 declare global {
 	interface Window {
 		__renderPerf?: boolean;
+		__renderPerfLastReport?: RenderPerfReport;
+		__renderPerfSnapshot?: () => RenderPerfReport;
+		__renderPerfReset?: () => void;
 	}
 }
 
@@ -139,7 +148,7 @@ export function onRenderPerfFrameComplete(): void {
 	}
 }
 
-function flush(): void {
+export function getRenderPerfSnapshot(): RenderPerfReport {
 	const spanRows: Array<Record<string, number | string>> = [];
 	for (const [name, stats] of spans) {
 		if (stats.samples.length === 0) continue;
@@ -169,14 +178,37 @@ function flush(): void {
 	}
 	counterRows.sort((a, b) => Number(b.perFrame) - Number(a.perFrame));
 
+	return {
+		frames: framesSinceFlush,
+		spans: spanRows,
+		counters: counterRows,
+	};
+}
+
+export function resetRenderPerf(): void {
+	spans.clear();
+	counters.clear();
+	pendingCountersThisFrame.clear();
+	framesSinceFlush = 0;
+}
+
+function flush(): void {
+	const report = getRenderPerfSnapshot();
+	if (typeof window !== "undefined") {
+		window.__renderPerfLastReport = report;
+	}
+
 	console.groupCollapsed(
 		`[render-perf] summary over ${framesSinceFlush} frames`,
 	);
-	if (spanRows.length > 0) console.table(spanRows);
-	if (counterRows.length > 0) console.table(counterRows);
+	if (report.spans.length > 0) console.table(report.spans);
+	if (report.counters.length > 0) console.table(report.counters);
 	console.groupEnd();
 
-	spans.clear();
-	counters.clear();
-	framesSinceFlush = 0;
+	resetRenderPerf();
+}
+
+if (typeof window !== "undefined") {
+	window.__renderPerfSnapshot = getRenderPerfSnapshot;
+	window.__renderPerfReset = resetRenderPerf;
 }

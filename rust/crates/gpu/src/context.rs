@@ -63,6 +63,13 @@ impl GpuContext {
         let (instance, adapter, device, queue, gl_canvas) = Self::acquire_device().await?;
         #[cfg(not(all(feature = "wasm", target_arch = "wasm32")))]
         let (instance, adapter, device, queue) = Self::acquire_device().await?;
+        #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
+        let texture_format = if gl_canvas.is_some() {
+            wgpu::TextureFormat::Rgba8Unorm
+        } else {
+            wgpu::TextureFormat::Bgra8Unorm
+        };
+        #[cfg(not(all(feature = "wasm", target_arch = "wasm32")))]
         let texture_format = if adapter.get_info().backend == wgpu::Backend::Gl {
             wgpu::TextureFormat::Rgba8Unorm
         } else {

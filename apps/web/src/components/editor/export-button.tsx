@@ -18,11 +18,13 @@ import {
 	getExportMimeType,
 	getExportFileExtension,
 	downloadBuffer,
+	selectExportDestination,
 } from "@/export";
 import { Check, Copy, Download, RotateCcw } from "lucide-react";
 import {
 	EXPORT_FORMAT_VALUES,
 	EXPORT_QUALITY_VALUES,
+	type ExportDestinationSelection,
 	type ExportFormat,
 	type ExportQuality,
 } from "@/export";
@@ -34,6 +36,7 @@ import {
 } from "@/components/section";
 import { useEditor } from "@/editor/use-editor";
 import { DEFAULT_EXPORT_OPTIONS } from "@/export/defaults";
+import { toast } from "sonner";
 
 function isExportFormat(value: string): value is ExportFormat {
 	return EXPORT_FORMAT_VALUES.some((formatValue) => formatValue === value);
@@ -113,6 +116,22 @@ function ExportPopover({
 
 	const handleExport = async () => {
 		if (!activeProject) return;
+		const extension = getExportFileExtension({ format });
+		const mimeType = getExportMimeType({ format });
+		const filename = `${activeProject.metadata.name}${extension}`;
+		let selection: ExportDestinationSelection;
+		try {
+			selection = await selectExportDestination({
+				filename,
+				mimeType,
+				extension,
+			});
+		} catch (error) {
+			console.error("Failed to select export destination:", error);
+			toast.error("Could not open the export destination");
+			return;
+		}
+		if (selection.status === "cancelled") return;
 
 		const result = await editor.project.export({
 			options: {
@@ -121,6 +140,8 @@ function ExportPopover({
 				fps: activeProject.settings.fps,
 				includeAudio: shouldIncludeAudio,
 			},
+			destination:
+				selection.status === "selected" ? selection.destination : undefined,
 		});
 
 		if (result.cancelled) {
@@ -131,10 +152,12 @@ function ExportPopover({
 		if (result.success && result.buffer) {
 			downloadBuffer({
 				buffer: result.buffer,
-				filename: `${activeProject.metadata.name}${getExportFileExtension({ format })}`,
-				mimeType: getExportMimeType({ format }),
+				filename,
+				mimeType,
 			});
+		}
 
+		if (result.success) {
 			editor.project.clearExportState();
 			onOpenChange(false);
 		}

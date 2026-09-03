@@ -3,6 +3,7 @@ import {
 	type ResolvedVisualSourceNodeState,
 	type VisualNodeParams,
 } from "./visual-node";
+import { LruCache } from "@/services/cache/lru-cache";
 
 export interface ImageNodeParams extends VisualNodeParams {
 	url: string;
@@ -15,7 +16,13 @@ export interface CachedImageSource {
 	height: number;
 }
 
-const imageSourceCache = new Map<string, Promise<CachedImageSource>>();
+const imageSourceCache = new LruCache<string, Promise<CachedImageSource>>({
+	maxEntries: 32,
+});
+
+export function clearImageSourceCache(): void {
+	imageSourceCache.clear();
+}
 
 export function loadImageSource({
 	url,
@@ -62,9 +69,12 @@ export function loadImageSource({
 		}
 
 		return { source: image, width: naturalWidth, height: naturalHeight };
-	})();
+	})().catch((error) => {
+		imageSourceCache.delete(cacheKey);
+		throw error;
+	});
 
-	imageSourceCache.set(cacheKey, promise);
+	imageSourceCache.set({ key: cacheKey, value: promise });
 	return promise;
 }
 

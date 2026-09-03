@@ -2,6 +2,8 @@ import type { NextConfig } from "next";
 import { withBotId } from "botid/next/config";
 import { withContentCollections } from "@content-collections/next";
 
+const useLocalWasm = process.env.OPENCUT_LOCAL_WASM === "1";
+
 const nextConfig: NextConfig = {
 	compiler: {
 		removeConsole: process.env.NODE_ENV === "production",
@@ -9,6 +11,13 @@ const nextConfig: NextConfig = {
 	reactStrictMode: true,
 	productionBrowserSourceMaps: true,
 	output: "standalone",
+	turbopack: useLocalWasm
+		? {
+				resolveAlias: {
+					"opencut-wasm": "../../rust/wasm/pkg",
+				},
+			}
+		: undefined,
 	images: {
 		remotePatterns: [
 			{

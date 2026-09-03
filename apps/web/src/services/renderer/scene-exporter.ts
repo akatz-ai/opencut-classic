@@ -5,6 +5,7 @@ import {
 	Mp4OutputFormat,
 	WebMOutputFormat,
 	BufferTarget,
+	StreamTarget,
 	CanvasSource,
 	AudioBufferSource,
 	QUALITY_LOW,
@@ -17,7 +18,7 @@ import { mediaTimeToSeconds } from "opencut-wasm";
 import { TICKS_PER_SECOND } from "@/wasm";
 import { frameRateToFloat } from "@/fps/utils";
 import type { RootNode } from "./nodes/root-node";
-import type { ExportFormat, ExportQuality } from "@/export";
+import type { ExportDestination, ExportFormat, ExportQuality } from "@/export";
 import { CanvasRenderer } from "./canvas-renderer";
 
 type ExportParams = {
@@ -28,6 +29,7 @@ type ExportParams = {
 	quality: ExportQuality;
 	shouldIncludeAudio?: boolean;
 	audioBuffer?: AudioBuffer;
+	destination?: ExportDestination;
 };
 
 const qualityMap = {
@@ -36,6 +38,8 @@ const qualityMap = {
 	high: QUALITY_HIGH,
 	very_high: QUALITY_VERY_HIGH,
 };
+
+const STREAMING_EXPORT_CHUNK_SIZE_BYTES = 1024 * 1024;
 
 export type SceneExporterEvents = {
 	progress: [progress: number];
@@ -50,6 +54,7 @@ export class SceneExporter extends EventEmitter<SceneExporterEvents> {
 	private quality: ExportQuality;
 	private shouldIncludeAudio: boolean;
 	private audioBuffer?: AudioBuffer;
+	private destination?: ExportDestination;
 
 	private isCancelled = false;
 
@@ -61,6 +66,7 @@ export class SceneExporter extends EventEmitter<SceneExporterEvents> {
 		quality,
 		shouldIncludeAudio,
 		audioBuffer,
+		destination,
 	}: ExportParams) {
 		super();
 		this.renderer = new CanvasRenderer({
@@ -73,6 +79,7 @@ export class SceneExporter extends EventEmitter<SceneExporterEvents> {
 		this.quality = quality;
 		this.shouldIncludeAudio = shouldIncludeAudio ?? false;
 		this.audioBuffer = audioBuffer;
+		this.destination = destination;
 	}
 
 	cancel(): void {
@@ -83,7 +90,7 @@ export class SceneExporter extends EventEmitter<SceneExporterEvents> {
 		rootNode,
 	}: {
 		rootNode: RootNode;
-	}): Promise<ArrayBuffer | null> {
+	}): Promise<{ buffer?: ArrayBuffer; savedToFile: boolean } | null> {
 		const fps = this.renderer.fps;
 		const fpsFloat = frameRateToFloat(fps);
 		const ticksPerFrame = Math.round(
@@ -94,9 +101,15 @@ export class SceneExporter extends EventEmitter<SceneExporterEvents> {
 		const outputFormat =
 			this.format === "webm" ? new WebMOutputFormat() : new Mp4OutputFormat();
 
+		const target = this.destination
+			? new StreamTarget(this.destination.writable, {
+					chunked: true,
+					chunkSize: STREAMING_EXPORT_CHUNK_SIZE_BYTES,
+				})
+			: new BufferTarget();
 		const output = new Output({
 			format: outputFormat,
-			target: new BufferTarget(),
+			target,
 		});
 
 		const videoSource = new CanvasSource(this.renderer.getOutputCanvas(), {
@@ -159,13 +172,19 @@ export class SceneExporter extends EventEmitter<SceneExporterEvents> {
 		await output.finalize();
 		this.emit("progress", 1);
 
-		const buffer = output.target.buffer;
-		if (!buffer) {
+		const buffer =
+			target instanceof BufferTarget ? (target.buffer ?? undefined) : undefined;
+		if (target instanceof BufferTarget && !buffer) {
 			this.emit("error", new Error("Failed to export video"));
 			return null;
 		}
 
-		this.emit("complete", buffer);
-		return buffer;
+		if (buffer) {
+			this.emit("complete", buffer);
+		}
+		return {
+			buffer,
+			savedToFile: target instanceof StreamTarget,
+		};
 	}
 }

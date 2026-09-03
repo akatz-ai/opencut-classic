@@ -5,6 +5,10 @@ import {
 	CanvasSink,
 	type WrappedCanvas,
 } from "mediabunny";
+import { LruCache } from "@/services/cache/lru-cache";
+import { incrementCounter } from "@/diagnostics/render-perf";
+
+const MAX_VIDEO_SINKS = 8;
 
 interface VideoSinkData {
 	input: Input;
@@ -18,10 +22,24 @@ interface VideoSinkData {
 }
 
 export class VideoCache {
-	private sinks = new Map<string, VideoSinkData>();
+	private sinks: LruCache<string, VideoSinkData>;
 	private initPromises = new Map<string, Promise<void>>();
 	private frameChain = new Map<string, Promise<unknown>>();
 	private seekGenerations = new Map<string, number>();
+
+	constructor({ maxSinks = MAX_VIDEO_SINKS }: { maxSinks?: number } = {}) {
+		this.sinks = new LruCache({
+			maxEntries: maxSinks,
+			onEvict: (mediaId, sinkData) => {
+				if (sinkData.iterator) {
+					void sinkData.iterator.return();
+				}
+				sinkData.input.dispose();
+				this.frameChain.delete(mediaId);
+				this.seekGenerations.delete(mediaId);
+			},
+		});
+	}
 
 	async getFrameAt({
 		mediaId,
@@ -32,6 +50,11 @@ export class VideoCache {
 		file: File;
 		time: number;
 	}): Promise<WrappedCanvas | null> {
+		incrementCounter({
+			name: this.sinks.has(mediaId)
+				? "videoSinkCacheHit"
+				: "videoSinkCacheMiss",
+		});
 		await this.ensureSink({ mediaId, file });
 
 		const sinkData = this.sinks.get(mediaId);
@@ -283,15 +306,18 @@ export class VideoCache {
 				fit: "contain",
 			});
 
-			this.sinks.set(mediaId, {
-				input,
-				sink,
-				iterator: null,
-				currentFrame: null,
-				nextFrame: null,
-				lastTime: -1,
-				prefetching: false,
-				prefetchPromise: null,
+			this.sinks.set({
+				key: mediaId,
+				value: {
+					input,
+					sink,
+					iterator: null,
+					currentFrame: null,
+					nextFrame: null,
+					lastTime: -1,
+					prefetching: false,
+					prefetchPromise: null,
+				},
 			});
 		} catch (error) {
 			input.dispose();
@@ -301,15 +327,7 @@ export class VideoCache {
 	}
 
 	clearVideo({ mediaId }: { mediaId: string }): void {
-		const sinkData = this.sinks.get(mediaId);
-		if (sinkData) {
-			if (sinkData.iterator) {
-				void sinkData.iterator.return();
-			}
-
-			sinkData.input.dispose();
-			this.sinks.delete(mediaId);
-		}
+		this.sinks.delete(mediaId);
 
 		this.initPromises.delete(mediaId);
 		this.frameChain.delete(mediaId);
@@ -317,9 +335,10 @@ export class VideoCache {
 	}
 
 	clearAll(): void {
-		for (const [mediaId] of this.sinks) {
-			this.clearVideo({ mediaId });
-		}
+		this.sinks.clear();
+		this.initPromises.clear();
+		this.frameChain.clear();
+		this.seekGenerations.clear();
 	}
 
 	getStats() {

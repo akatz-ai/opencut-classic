@@ -4,6 +4,7 @@ import {
 	type ResolvedVisualSourceNodeState,
 	type VisualNodeParams,
 } from "./visual-node";
+import { LruCache } from "@/services/cache/lru-cache";
 
 export interface StickerNodeParams extends VisualNodeParams {
 	stickerId: string;
@@ -17,7 +18,9 @@ interface CachedStickerSource {
 	height: number;
 }
 
-const stickerSourceCache = new Map<string, Promise<CachedStickerSource>>();
+const stickerSourceCache = new LruCache<string, Promise<CachedStickerSource>>({
+	maxEntries: 128,
+});
 
 export function loadStickerSource({
 	stickerId,
@@ -47,9 +50,12 @@ export function loadStickerSource({
 			width: image.naturalWidth,
 			height: image.naturalHeight,
 		};
-	})();
+	})().catch((error) => {
+		stickerSourceCache.delete(stickerId);
+		throw error;
+	});
 
-	stickerSourceCache.set(stickerId, promise);
+	stickerSourceCache.set({ key: stickerId, value: promise });
 	return promise;
 }
 

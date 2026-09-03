@@ -1,6 +1,6 @@
 "use client";
 
-import { useElementSelection } from "@/timeline/hooks/element/use-element-selection";
+import { useCallback } from "react";
 import { TimelineElement } from "./timeline-element";
 import type { TimelineTrack } from "@/timeline";
 import type { TimelineElement as TimelineElementType } from "@/timeline";
@@ -45,7 +45,38 @@ export function TimelineTrackContent({
 	shouldIgnoreClick,
 	targetElementId = null,
 }: TimelineTrackContentProps) {
-	const { isElementSelected } = useElementSelection();
+	const handleResizeStart = useCallback(
+		({
+			event,
+			element,
+			side,
+		}: {
+			event: React.MouseEvent;
+			element: TimelineElementType;
+			side: "left" | "right";
+		}) => onResizeStart({ event, element, track, side }),
+		[onResizeStart, track],
+	);
+	const handleElementMouseDown = useCallback(
+		({
+			event,
+			element,
+		}: {
+			event: React.MouseEvent;
+			element: TimelineElementType;
+		}) => onElementMouseDown({ event, element, track }),
+		[onElementMouseDown, track],
+	);
+	const handleElementClick = useCallback(
+		({
+			event,
+			element,
+		}: {
+			event: React.MouseEvent;
+			element: TimelineElementType;
+		}) => onElementClick({ event, element, track }),
+		[onElementClick, track],
+	);
 
 	return (
 		<div className="relative size-full">
@@ -81,27 +112,15 @@ export function TimelineTrackContent({
 					<div className="text-muted-foreground border-muted/30 pointer-events-none flex size-full items-center justify-center rounded-sm border-2 border-dashed text-xs" />
 				) : (
 					track.elements.map((element) => {
-						const isSelected = isElementSelected({
-							trackId: track.id,
-							elementId: element.id,
-						});
-
 						return (
 							<TimelineElement
 								key={element.id}
 								element={element}
 								track={track}
 								zoomLevel={zoomLevel}
-								isSelected={isSelected}
-								onResizeStart={({ event, element, side }) =>
-									onResizeStart({ event, element, track, side })
-								}
-								onElementMouseDown={({ event, element }) =>
-									onElementMouseDown({ event, element, track })
-								}
-								onElementClick={({ event, element }) =>
-									onElementClick({ event, element, track })
-								}
+								onResizeStart={handleResizeStart}
+								onElementMouseDown={handleElementMouseDown}
+								onElementClick={handleElementClick}
 								dragView={dragView}
 								isDropTarget={element.id === targetElementId}
 							/>

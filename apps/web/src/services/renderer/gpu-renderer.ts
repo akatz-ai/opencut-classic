@@ -1,21 +1,31 @@
-import {
-	applyEffectPasses,
-	applyMaskFeather as applyMaskFeatherWasm,
-	initializeGpu,
-} from "opencut-wasm";
+import * as opencutWasm from "opencut-wasm";
 import type { EffectPass, EffectUniformValue } from "@/effects/types";
 
 let gpuAvailable = false;
+let gpuBackend = "unavailable";
 let initPromise: Promise<void> | null = null;
+
+declare global {
+	interface Window {
+		__opencutGpuBackend?: string;
+	}
+}
 
 export function initializeGpuRenderer(): Promise<void> {
 	if (!initPromise) {
-		initPromise = initializeGpu()
+		initPromise = opencutWasm
+			.initializeGpu()
 			.then(() => {
 				gpuAvailable = true;
+				const readBackend = Reflect.get(opencutWasm, "getGpuBackend");
+				gpuBackend =
+					typeof readBackend === "function" ? String(readBackend()) : "unknown";
+				window.__opencutGpuBackend = gpuBackend;
 			})
 			.catch((error: unknown) => {
 				gpuAvailable = false;
+				gpuBackend = "unavailable";
+				window.__opencutGpuBackend = gpuBackend;
 				const message = error instanceof Error ? error.message : String(error);
 				console.warn(`GPU renderer unavailable: ${message}`);
 			});
@@ -25,6 +35,10 @@ export function initializeGpuRenderer(): Promise<void> {
 
 export function isGpuAvailable(): boolean {
 	return gpuAvailable;
+}
+
+export function getGpuBackend(): string {
+	return gpuBackend;
 }
 
 export const gpuRenderer = {
@@ -43,7 +57,7 @@ export const gpuRenderer = {
 			return source;
 		}
 
-		return applyEffectPasses({
+		return opencutWasm.applyEffectPasses({
 			source,
 			width,
 			height,
@@ -66,7 +80,7 @@ export const gpuRenderer = {
 			return maskCanvas;
 		}
 
-		return applyMaskFeatherWasm({
+		return opencutWasm.applyMaskFeather({
 			mask: maskCanvas,
 			width,
 			height,
