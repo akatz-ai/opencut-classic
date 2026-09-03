@@ -1,7 +1,7 @@
 use std::{env, fs, path::PathBuf};
 
 use anyhow::{bail, Context, Result};
-use media::{ExportSpec, MediaEngine, ProxyOptions};
+use media::{apply_timeline_cuts, CutRange, ExportSpec, MediaEngine, ProxyOptions};
 
 fn main() {
     if let Err(error) = run() {
@@ -43,6 +43,16 @@ fn run() -> Result<()> {
                 .transpose()?;
             engine.mux_export(&video, &output, spec.as_ref())?;
             println!("{}", serde_json::json!({ "success": true }));
+        }
+        "apply-cuts" => {
+            let tracks: serde_json::Value =
+                serde_json::from_slice(&fs::read(required_path(&options, "tracks")?)?)?;
+            let ranges: Vec<CutRange> =
+                serde_json::from_slice(&fs::read(required_path(&options, "ranges")?)?)?;
+            println!(
+                "{}",
+                serde_json::to_string(&apply_timeline_cuts(tracks, ranges)?)?
+            );
         }
         _ => bail!("unknown command: {command}"),
     }

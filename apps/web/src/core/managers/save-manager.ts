@@ -64,7 +64,16 @@ export class SaveManager {
 
 	async flush(): Promise<void> {
 		this.hasPendingSave = true;
+		while (this.isSaving) {
+			await new Promise((resolve) => setTimeout(resolve, 10));
+		}
 		await this.saveNow();
+		while (this.isSaving) {
+			await new Promise((resolve) => setTimeout(resolve, 10));
+		}
+		if (this.hasPendingSave) {
+			await this.saveNow();
+		}
 	}
 
 	getIsDirty(): boolean {

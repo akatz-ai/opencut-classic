@@ -14,6 +14,7 @@ import {
 	initializeGpuRenderer,
 	isGpuAvailable,
 } from "@/services/renderer/gpu-renderer";
+import { AgentBridge } from "@/agent-bridge/client";
 
 interface EditorProviderProps {
 	projectId: string;
@@ -121,6 +122,7 @@ export function EditorProvider({ projectId, children }: EditorProviderProps) {
 
 	return (
 		<>
+			<AgentBridge />
 			<EditorRuntimeBindings />
 			{children}
 		</>

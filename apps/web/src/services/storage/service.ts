@@ -361,6 +361,47 @@ class StorageService {
 		}
 	}
 
+	async saveMediaMetadata({
+		projectId,
+		mediaAsset,
+	}: {
+		projectId: string;
+		mediaAsset: MediaAsset;
+	}): Promise<void> {
+		const { mediaMetadataAdapter } = this.getProjectMediaAdapters({ projectId });
+		await mediaMetadataAdapter.set({
+			key: mediaAsset.id,
+			value: {
+				id: mediaAsset.id,
+				name: mediaAsset.name,
+				type: mediaAsset.type,
+				size: mediaAsset.file.size,
+				lastModified: mediaAsset.file.lastModified,
+				width: mediaAsset.width,
+				height: mediaAsset.height,
+				duration: mediaAsset.duration,
+				fps: mediaAsset.fps,
+				hasAudio: mediaAsset.hasAudio,
+				codec: mediaAsset.codec,
+				canDecode: mediaAsset.canDecode,
+				thumbnailUrl: mediaAsset.thumbnailUrl,
+				ephemeral: mediaAsset.ephemeral,
+			},
+		});
+	}
+
+	async loadMediaFile({
+		projectId,
+		id,
+	}: {
+		projectId: string;
+		id: string;
+	}): Promise<File | null> {
+		return await this.getProjectMediaAdapters({ projectId }).mediaAssetsAdapter.get(
+			id,
+		);
+	}
+
 	async loadMediaAsset({
 		projectId,
 		id,

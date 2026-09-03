@@ -12,6 +12,8 @@ import {
 	generateNativeProxy,
 	getNativeMediaHealth,
 } from "@/services/native-media/client";
+import { readVideoFile } from "@/media/mediabunny";
+import { hasMediaId } from "@/timeline/element-utils";
 
 export class MediaManager {
 	private assets: MediaAsset[] = [];
@@ -181,8 +183,12 @@ export class MediaManager {
 		this.notify();
 
 		try {
-			const mediaAssets = await storageService.loadAllMediaAssets({
+			let mediaAssets = await storageService.loadAllMediaAssets({
 				projectId,
+			});
+			mediaAssets = await this.recoverReferencedVideos({
+				projectId,
+				mediaAssets,
 			});
 			this.assets = mediaAssets;
 			this.notify();
@@ -197,6 +203,65 @@ export class MediaManager {
 			this.isLoading = false;
 			this.notify();
 		}
+	}
+
+	private async recoverReferencedVideos({
+		projectId,
+		mediaAssets,
+	}: {
+		projectId: string;
+		mediaAssets: MediaAsset[];
+	}): Promise<MediaAsset[]> {
+		const loadedIds = new Set(mediaAssets.map((asset) => asset.id));
+		const referencedVideos = new Map<string, string>();
+		for (const scene of this.editor.scenes.getScenes()) {
+			for (const track of [
+				...scene.tracks.overlay,
+				scene.tracks.main,
+				...scene.tracks.audio,
+			]) {
+				for (const element of track.elements) {
+					if (
+						element.type === "video" &&
+						hasMediaId(element) &&
+						!loadedIds.has(element.mediaId)
+					) {
+						referencedVideos.set(element.mediaId, cleanRecoveredName(element.name));
+					}
+				}
+			}
+		}
+
+		const recovered: MediaAsset[] = [];
+		for (const [mediaId, name] of referencedVideos) {
+			const file = await storageService.loadMediaFile({ projectId, id: mediaId });
+			if (!file) continue;
+			try {
+				const video = await readVideoFile({ file });
+				const asset: MediaAsset = {
+					id: mediaId,
+					name,
+					type: "video",
+					file,
+					url: URL.createObjectURL(file),
+					width: video.width,
+					height: video.height,
+					duration: video.duration,
+					fps: Number.isFinite(video.fps) ? Math.round(video.fps) : undefined,
+					hasAudio: video.hasAudio,
+					codec: video.codec ?? undefined,
+					canDecode: video.canDecode,
+					thumbnailUrl: video.thumbnailUrl ?? undefined,
+				};
+				await storageService.saveMediaMetadata({ projectId, mediaAsset: asset });
+				recovered.push(asset);
+				loadedIds.add(mediaId);
+				console.info(`[media] Recovered metadata for ${name} from OPFS`);
+			} catch (error) {
+				console.warn(`[media] Failed to recover ${name} from OPFS:`, error);
+			}
+		}
+		return [...mediaAssets, ...recovered];
 	}
 
 	async clearProjectMedia({ projectId }: { projectId: string }): Promise<void> {
@@ -274,4 +339,8 @@ export class MediaManager {
 			fn();
 		});
 	}
+}
+
+function cleanRecoveredName(name: string): string {
+	return name.replace(/(?: \((?:left|right|cut \d+)\))+$/u, "");
 }

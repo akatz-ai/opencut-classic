@@ -164,11 +164,11 @@ with a 240-frame GOP. Before adaptive rendering, interactive playback uploaded
 
 The deterministic 60-frame preview benchmark on `akatz-arch` measured:
 
-| Configuration | Elapsed | Throughput | Texture sync mean | Resolve mean | Uploaded pixels/changing frame |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Full 4K original | 2.73 s | 22 fps | 39.6 ms | 5.2 ms | 8.47 M |
-| Auto 960x540 original | 0.77 s | 78 fps | 7.9 ms | 4.5 ms | 0.52 M |
-| Auto 960x540 proxy | 0.50 s | 120 fps | 6.3 ms | 1.6 ms | 0.52 M |
+| Configuration         | Elapsed | Throughput | Texture sync mean | Resolve mean | Uploaded pixels/changing frame |
+| --------------------- | ------: | ---------: | ----------------: | -----------: | -----------------------------: |
+| Full 4K original      |  2.73 s |     22 fps |           39.6 ms |       5.2 ms |                         8.47 M |
+| Auto 960x540 original |  0.77 s |     78 fps |            7.9 ms |       4.5 ms |                         0.52 M |
+| Auto 960x540 proxy    |  0.50 s |    120 fps |            6.3 ms |       1.6 ms |                         0.52 M |
 
 The native engine generated the fixture's 1280x720 proxy in 1.36 seconds with
 NVENC, reducing it from 39.3 MiB to 9.2 MiB. A route-level export test produced
@@ -214,5 +214,5 @@ from 102 to 97 with no GPU allocation failures.
 
 The repository-wide ESLint command still reports 106 errors and 16 warnings in
 archived code outside this pass. Changed performance files lint clean,
-TypeScript passes, the optimized Next.js build succeeds, all 235 Bun tests pass,
-and all 16 Rust workspace tests pass.
+TypeScript passes, the optimized Next.js build succeeds, all 238 Bun tests pass,
+and all 17 Rust workspace tests pass.

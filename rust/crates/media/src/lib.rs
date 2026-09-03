@@ -8,6 +8,9 @@ use std::{
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
+mod cuts;
+pub use cuts::{apply_timeline_cuts, CutRange, CutResult};
+
 const DEFAULT_SAMPLE_RATE: u32 = 48_000;
 const DEFAULT_AUDIO_BITRATE: &str = "192k";
 
