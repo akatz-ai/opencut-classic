@@ -1,24 +1,12 @@
 "use client";
 
-import { Input, ALL_FORMATS, BlobSource, AudioBufferSink } from "mediabunny";
+import { Input, ALL_FORMATS, BlobSource, AudioSampleSink } from "mediabunny";
 import { createAudioContext } from "@/media/audio";
 import {
 	buildSourceWaveformSummary,
-	buildStreamingWaveformSummary,
+	buildStreamingWaveformSummaryFromSamples,
 	type SourceWaveformSummary,
 } from "@/media/waveform-summary";
-
-async function* mapAsync<TInput, TOutput>({
-	source,
-	transform,
-}: {
-	source: AsyncIterable<TInput>;
-	transform: (value: TInput) => TOutput;
-}): AsyncGenerator<TOutput, void, unknown> {
-	for await (const value of source) {
-		yield transform(value);
-	}
-}
 
 interface GetSourceWaveformSummaryArgs {
 	sourceKey: string;
@@ -120,13 +108,10 @@ export class WaveformCache {
 				};
 			}
 
-			const sink = new AudioBufferSink(audioTrack);
-			return await buildStreamingWaveformSummary({
+			const sink = new AudioSampleSink(audioTrack);
+			return await buildStreamingWaveformSummaryFromSamples({
 				sourceKey,
-				chunks: mapAsync({
-					source: sink.buffers(0),
-					transform: ({ buffer }) => buffer,
-				}),
+				samples: sink.samples(0),
 			});
 		} finally {
 			input.dispose();

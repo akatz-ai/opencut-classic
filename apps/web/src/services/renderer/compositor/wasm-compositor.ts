@@ -35,6 +35,7 @@ type RenderedCacheEntry = {
 type ExternalCacheEntry = {
 	kind: "external";
 	source: CanvasImageSource;
+	stagingCanvas: OffscreenCanvas | null;
 	width: number;
 	height: number;
 };
@@ -90,9 +91,8 @@ class WasmCompositor {
 	render(frame: FrameDescriptor) {
 		renderFrame(frame);
 		if (isRenderPerfEnabled()) {
-			recordWasmFrameProfile(
-				getLastFrameProfile() as Array<{ name: string; durationMs: number }>,
-			);
+			const profile: unknown = getLastFrameProfile();
+			recordWasmFrameProfile(parseWasmFrameProfile(profile));
 		}
 	}
 
@@ -113,20 +113,24 @@ class WasmCompositor {
 			name: "textureUploadPixels",
 			by: texture.width * texture.height,
 		});
+		const { source, stagingCanvas } = prepareExternalUploadSource({
+			source: texture.source,
+			width: texture.width,
+			height: texture.height,
+			stagingCanvas:
+				previous?.kind === "external" ? previous.stagingCanvas : null,
+			label: `texture upload ${texture.id}`,
+		});
 		uploadTexture({
 			id: texture.id,
-			source: ensureOffscreenCanvas({
-				source: texture.source,
-				width: texture.width,
-				height: texture.height,
-				label: `texture upload ${texture.id}`,
-			}),
+			source,
 			width: texture.width,
 			height: texture.height,
 		});
 		this.cache.set(texture.id, {
 			kind: "external",
 			source: texture.source,
+			stagingCanvas,
 			width: texture.width,
 			height: texture.height,
 		});
@@ -184,6 +188,27 @@ class WasmCompositor {
 
 export const wasmCompositor = new WasmCompositor();
 
+function parseWasmFrameProfile(
+	value: unknown,
+): Array<{ name: string; durationMs: number }> {
+	if (!Array.isArray(value)) return [];
+	const entries: Array<{ name: string; durationMs: number }> = [];
+	for (const item of value) {
+		if (
+			typeof item !== "object" ||
+			item === null ||
+			!("name" in item) ||
+			!("durationMs" in item) ||
+			typeof item.name !== "string" ||
+			typeof item.durationMs !== "number"
+		) {
+			continue;
+		}
+		entries.push({ name: item.name, durationMs: item.durationMs });
+	}
+	return entries;
+}
+
 function createBackingCanvas({
 	width,
 	height,
@@ -197,31 +222,42 @@ function createBackingCanvas({
 	return new OffscreenCanvas(width, height);
 }
 
-function ensureOffscreenCanvas({
+function prepareExternalUploadSource({
 	source,
 	width,
 	height,
+	stagingCanvas,
 	label,
 }: {
 	source: CanvasImageSource;
 	width: number;
 	height: number;
+	stagingCanvas: OffscreenCanvas | null;
 	label: string;
-}): OffscreenCanvas {
+}): { source: OffscreenCanvas; stagingCanvas: OffscreenCanvas | null } {
 	if (source instanceof OffscreenCanvas) {
-		return source;
+		return { source, stagingCanvas };
 	}
 
 	if (typeof OffscreenCanvas === "undefined") {
 		throw new Error(`OffscreenCanvas is required for ${label}`);
 	}
 
-	const canvas = new OffscreenCanvas(width, height);
+	const canReuse =
+		stagingCanvas?.width === width && stagingCanvas.height === height;
+	const canvas = canReuse
+		? stagingCanvas
+		: createBackingCanvas({ width, height });
+	incrementCounter({
+		name: canReuse
+			? "externalUploadStagingCanvasReused"
+			: "externalUploadStagingCanvasCreated",
+	});
 	const context = canvas.getContext("2d");
 	if (!context) {
 		throw new Error(`Failed to get 2d context for ${label}`);
 	}
 	context.clearRect(0, 0, width, height);
 	context.drawImage(source, 0, 0, width, height);
-	return canvas;
+	return { source: canvas, stagingCanvas: canvas };
 }

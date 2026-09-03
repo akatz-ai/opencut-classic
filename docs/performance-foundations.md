@@ -177,6 +177,23 @@ reached 37.3 ms at p95. This makes lower-copy ingestion a useful future
 optimization for projects with several concurrent video layers, but it is no
 longer required for ordinary one-layer 30 fps editing.
 
+### Extract-audio scrub regression
+
+A 469 MiB 4K/48 fps source exposed two Chrome shared-memory descriptor leaks.
+Waveform analysis converted every decoded audio packet into a Web Audio
+`AudioBuffer`, while video upload created a new staging `OffscreenCanvas` for
+each changing frame. The renderer accumulated 955 deleted 2 MiB `/dev/shm`
+handles, reached 1,023 of its 1,024 file-descriptor limit, and then failed to
+allocate GPU command buffers.
+
+Waveforms now use closeable MediaBunny `AudioSample` objects, copy PCM into
+reused ordinary arrays, and explicitly close every sample. Extracted video
+audio uses the authoring proxy for waveform display and waits for that proxy
+instead of scanning a large original. External video uploads reuse one staging
+canvas per texture. On the exact recovered project, 600 deterministic frames
+left descriptor count unchanged, and 400 real pointer-scrub seeks changed it
+from 102 to 97 with no GPU allocation failures.
+
 ## Deferred work
 
 1. Preserve animated-volume interpolation in the native FFmpeg filter graph so
@@ -192,5 +209,5 @@ longer required for ordinary one-layer 30 fps editing.
 
 The repository-wide ESLint command still reports 106 errors and 16 warnings in
 archived code outside this pass. Changed performance files lint clean,
-TypeScript passes, the optimized Next.js build succeeds, all 234 Bun tests pass,
+TypeScript passes, the optimized Next.js build succeeds, all 235 Bun tests pass,
 and all 16 Rust workspace tests pass.

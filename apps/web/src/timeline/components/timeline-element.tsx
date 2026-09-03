@@ -41,6 +41,7 @@ import type {
 	AudioElement,
 } from "@/timeline";
 import type { MediaAsset } from "@/media/types";
+import { shouldGeneratePreviewProxy } from "@/media/proxy-policy";
 import { mediaSupportsAudio } from "@/media/media-utils";
 import {
 	canToggleSourceAudio,
@@ -1007,10 +1008,20 @@ function AudioElementContent({
 
 	const audioBuffer =
 		element.sourceType === "library" ? element.buffer : undefined;
+	const shouldWaitForVideoProxy =
+		element.sourceType === "upload" &&
+		mediaAsset?.type === "video" &&
+		!mediaAsset.proxy &&
+		shouldGeneratePreviewProxy({ asset: mediaAsset });
+	const waveformMediaSource = shouldWaitForVideoProxy
+		? null
+		: (mediaAsset?.proxy ?? mediaAsset);
 	const audioUrl =
-		element.sourceType === "library" ? element.sourceUrl : mediaAsset?.url;
+		element.sourceType === "library"
+			? element.sourceUrl
+			: waveformMediaSource?.url;
 	const sourceFile =
-		element.sourceType === "upload" ? mediaAsset?.file : undefined;
+		element.sourceType === "upload" ? waveformMediaSource?.file : undefined;
 	const sourceKey =
 		element.sourceType === "upload"
 			? buildWaveformSourceKey({ kind: "media", id: element.mediaId })
