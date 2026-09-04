@@ -1,4 +1,6 @@
 import type { StreamTargetChunk } from "mediabunny";
+import type { FrameRate } from "opencut-wasm";
+import type { ExportBitrateMode } from "@/export";
 
 export interface NativeMediaHealth {
 	available: boolean;
@@ -34,7 +36,22 @@ export interface NativeAudioExportSpec {
 	clips: NativeAudioClip[];
 }
 
+export interface NativeVideoFrameSink {
+	add({
+		canvas,
+		timestampSeconds,
+		durationSeconds,
+	}: {
+		canvas: HTMLCanvasElement | OffscreenCanvas;
+		timestampSeconds: number;
+		durationSeconds: number;
+	}): Promise<void>;
+	close(): Promise<void>;
+	cancel(): Promise<void>;
+}
+
 let healthPromise: Promise<NativeMediaHealth | null> | null = null;
+const NATIVE_FRAME_BATCH_BYTES = 64 * 1024 * 1024;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
@@ -191,13 +208,100 @@ export class NativeExportSession {
 		});
 	}
 
+	createNvencVideoSink({
+		width,
+		height,
+		fps,
+		bitrate,
+		bitrateMode,
+	}: {
+		width: number;
+		height: number;
+		fps: FrameRate;
+		bitrate: number;
+		bitrateMode: ExportBitrateMode;
+	}): NativeVideoFrameSink {
+		const endpoint = `/api/native-media/export/${this.sessionId}/raw-video`;
+		const startRequest = fetch(endpoint, {
+			method: "POST",
+			headers: {
+				"X-OpenCut-Width": String(width),
+				"X-OpenCut-Height": String(height),
+				"X-OpenCut-Fps-Numerator": String(fps.numerator),
+				"X-OpenCut-Fps-Denominator": String(fps.denominator),
+				"X-OpenCut-Video-Bitrate": String(bitrate),
+				"X-OpenCut-Bitrate-Mode": bitrateMode,
+			},
+		}).then(async (response) =>
+			expectOk({ response, operation: "Native NVENC startup" }),
+		);
+		let pendingFrames: ArrayBuffer[] = [];
+		let pendingBytes = 0;
+		let closed = false;
+		const flush = async () => {
+			if (pendingFrames.length === 0) return;
+			await startRequest;
+			const body = new Blob(pendingFrames, {
+				type: "application/octet-stream",
+			});
+			pendingFrames = [];
+			pendingBytes = 0;
+			await expectOk({
+				response: await fetch(endpoint, { method: "PUT", body }),
+				operation: "Native NVENC frame batch",
+			});
+		};
+		return {
+			add: async ({ canvas, timestampSeconds, durationSeconds }) => {
+				if (closed) throw new Error("Native video stream is closed");
+				const frame = new VideoFrame(canvas, {
+					timestamp: Math.round(timestampSeconds * 1_000_000),
+					duration: Math.round(durationSeconds * 1_000_000),
+				});
+				try {
+					const copyOptions: VideoFrameCopyToOptions = { format: "BGRA" };
+					const bytes = new Uint8Array(frame.allocationSize(copyOptions));
+					await frame.copyTo(bytes, copyOptions);
+					pendingFrames.push(bytes.buffer);
+					pendingBytes += bytes.byteLength;
+					if (pendingBytes >= NATIVE_FRAME_BATCH_BYTES) await flush();
+				} finally {
+					frame.close();
+				}
+			},
+			close: async () => {
+				if (closed) return;
+				closed = true;
+				await flush();
+				await expectOk({
+					response: await fetch(endpoint, { method: "PATCH" }),
+					operation: "Native NVENC finalization",
+				});
+			},
+			cancel: async () => {
+				if (closed) return;
+				closed = true;
+				pendingFrames = [];
+				pendingBytes = 0;
+				await startRequest.catch(() => undefined);
+				await fetch(endpoint, { method: "DELETE" }).catch(() => undefined);
+			},
+		};
+	}
+
 	async finalize({
 		spec,
+		videoTranscode,
 	}: {
-		spec: NativeAudioExportSpec;
+		spec: NativeAudioExportSpec | null;
+		videoTranscode?: {
+			fps: FrameRate;
+			bitrate: number;
+			bitrateMode: ExportBitrateMode;
+		};
 	}): Promise<Response> {
 		const sourceIds = new Map<string, string>();
-		for (const clip of spec.clips) {
+		for (const clip of spec?.clips ?? []) {
 			if (sourceIds.has(clip.sourceKey)) continue;
 			const sourceId = `s${sourceIds.size}`;
 			sourceIds.set(clip.sourceKey, sourceId);
@@ -219,15 +323,35 @@ export class NativeExportSession {
 				`/api/native-media/export/${this.sessionId}/finalize`,
 				{
 					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({
-						durationSeconds: spec.durationSeconds,
-						sampleRate: spec.sampleRate,
-						clips: spec.clips.map(({ sourceKey, file: _file, ...clip }) => ({
-							...clip,
-							sourceId: sourceIds.get(sourceKey),
-						})),
-					}),
+					headers: {
+						"Content-Type": "application/json",
+						...(videoTranscode
+							? {
+									"X-OpenCut-Video-Bitrate": String(videoTranscode.bitrate),
+									"X-OpenCut-Bitrate-Mode": videoTranscode.bitrateMode,
+									"X-OpenCut-Fps-Numerator": String(
+										videoTranscode.fps.numerator,
+									),
+									"X-OpenCut-Fps-Denominator": String(
+										videoTranscode.fps.denominator,
+									),
+								}
+							: {}),
+					},
+					body: JSON.stringify(
+						spec
+							? {
+									durationSeconds: spec.durationSeconds,
+									sampleRate: spec.sampleRate,
+									clips: spec.clips.map(
+										({ sourceKey, file: _file, ...clip }) => ({
+											...clip,
+											sourceId: sourceIds.get(sourceKey),
+										}),
+									),
+								}
+							: null,
+					),
 				},
 			),
 			operation: "Native export finalization",

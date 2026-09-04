@@ -13,12 +13,19 @@ export const EXPORT_FORMAT_VALUES = ["mp4", "webm"] as const;
 
 export type ExportFormat = (typeof EXPORT_FORMAT_VALUES)[number];
 export type ExportQuality = (typeof EXPORT_QUALITY_VALUES)[number];
+export type ExportEncoder = "auto" | "native_nvenc" | "webcodecs";
+export type ExportBitrateMode = "variable" | "constant";
 
 export interface ExportOptions {
 	format: ExportFormat;
 	quality: ExportQuality;
 	fps?: FrameRate;
 	includeAudio?: boolean;
+	width?: number;
+	height?: number;
+	videoBitrate?: number;
+	encoder?: ExportEncoder;
+	bitrateMode?: ExportBitrateMode;
 }
 
 export interface ExportDestination {
@@ -38,6 +45,9 @@ export interface ExportState {
 	isExporting: boolean;
 	progress: number;
 	result: ExportResult | null;
+	totalFrames?: number;
+	currentFrame?: number;
+	elapsedMs?: number;
 }
 
 export function getExportMimeType({

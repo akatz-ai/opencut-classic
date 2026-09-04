@@ -51,6 +51,37 @@ try {
 			});
 			break;
 		}
+		case "export-project": {
+			const projectId = requiredOption(args, "--project");
+			result = await runCommand({
+				projectId,
+				kind: "export_project",
+				expectedRevision: requiredOption(args, "--expected-revision"),
+				payload: {
+					width: numberOption(args, "--width", 1920),
+					height: numberOption(args, "--height", 1080),
+					fps: numberOption(args, "--fps", 30),
+					videoBitrate: numberOption(args, "--video-bitrate", 8_000_000),
+					bitrateMode: choiceOption(
+						args,
+						"--bitrate-mode",
+						["variable", "constant"],
+						"variable",
+					),
+					includeAudio: !args.includes("--no-audio"),
+					encoder: choiceOption(
+						args,
+						"--encoder",
+						["webcodecs", "native_nvenc"],
+						"webcodecs",
+					),
+					filename:
+						optionalOption(args, "--filename") ?? "opencut-agent-export.mp4",
+				},
+				timeoutMs: 4 * 60 * 60 * 1000,
+			});
+			break;
+		}
 		case "plan-speech-cuts": {
 			const projectId = requiredOption(args, "--project");
 			const mediaId = requiredOption(args, "--media");
@@ -143,7 +174,7 @@ try {
 		}
 		default:
 			throw new Error(
-				"Usage: opencut-agent <projects|inspect|stage-media|plan-speech-cuts|apply-cuts> [options]",
+				"Usage: opencut-agent <projects|inspect|stage-media|plan-speech-cuts|apply-cuts|export-project> [options]",
 			);
 	}
 	console.log(JSON.stringify(result, null, 2));
@@ -170,6 +201,19 @@ function requiredOption(args: string[], name: string): string {
 function optionalOption(args: string[], name: string): string | undefined {
 	const index = args.indexOf(name);
 	return index >= 0 ? args[index + 1] : undefined;
+}
+
+function choiceOption<const T extends string>(
+	args: string[],
+	name: string,
+	choices: readonly T[],
+	fallback: T,
+): T {
+	const value = optionalOption(args, name);
+	if (value === undefined) return fallback;
+	const match = choices.find((choice) => choice === value);
+	if (!match) throw new Error(`${name} must be one of: ${choices.join(", ")}`);
+	return match;
 }
 
 function optionValues(args: string[], name: string): string[] {

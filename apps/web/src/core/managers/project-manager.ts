@@ -35,8 +35,12 @@ import {
 import { loadFonts } from "@/fonts/google-fonts";
 import { DEFAULTS } from "@/timeline/defaults";
 import { getElementFontFamilies } from "@/timeline/element-utils";
-import { getRaisedProjectFpsForImportedMedia } from "@/fps/utils";
+import {
+	frameRateToFloat,
+	getRaisedProjectFpsForImportedMedia,
+} from "@/fps/utils";
 import type { MediaAsset } from "@/media/types";
+import { TICKS_PER_SECOND } from "@/wasm";
 
 const PROJECT_SORT_OPTIONS: Record<
 	TProjectSortOption,
@@ -239,14 +243,35 @@ export class ProjectManager {
 		destination?: ExportDestination;
 	}): Promise<ExportResult> {
 		this.exportCancelRequested = false;
-		this.exportState = { isExporting: true, progress: 0, result: null };
+		const startedAt = Date.now();
+		const project = this.getActive();
+		const totalFrames = Math.floor(
+			(this.editor.timeline.getTotalDuration() / TICKS_PER_SECOND) *
+				frameRateToFloat(options.fps ?? project.settings.fps),
+		);
+		this.exportState = {
+			isExporting: true,
+			progress: 0,
+			result: null,
+			totalFrames,
+			currentFrame: 0,
+			elapsedMs: 0,
+		};
 		this.notify();
 
 		const result = await this.editor.renderer.exportProject({
 			options,
 			destination,
-			onProgress: ({ progress }) => {
-				this.exportState = { ...this.exportState, progress };
+			onProgress: ({ progress, frameProgress }) => {
+				this.exportState = {
+					...this.exportState,
+					progress,
+					currentFrame:
+						frameProgress === undefined
+							? this.exportState.currentFrame
+							: Math.min(totalFrames, Math.round(frameProgress * totalFrames)),
+					elapsedMs: Date.now() - startedAt,
+				};
 				this.notify();
 			},
 			onCancel: () => this.exportCancelRequested,

@@ -9,7 +9,10 @@ import {
 	requireLocalNativeRequest,
 	runMediaEngine,
 } from "@/server/native-media/engine";
-import { fileResponse, nativeMediaError } from "@/server/native-media/responses";
+import {
+	fileResponse,
+	nativeMediaError,
+} from "@/server/native-media/responses";
 import { removeExportSession } from "@/server/native-media/export-session";
 
 export const runtime = "nodejs";
@@ -44,28 +47,66 @@ export async function POST(
 		const routeSessionId = (await params).sessionId;
 		sessionId = routeSessionId;
 		const directory = await requireExportSession(routeSessionId);
-		const browserSpec = exportSchema.parse(await request.json());
-		const spec = {
-			durationSeconds: browserSpec.durationSeconds,
-			sampleRate: browserSpec.sampleRate,
-			clips: browserSpec.clips.map(({ sourceId, ...clip }) => ({
-				...clip,
-				source: sourcePath({ sessionId: routeSessionId, sourceId }),
-			})),
-		};
+		const body: unknown = await request.json();
+		const videoBitrate = optionalPositiveIntegerHeader({
+			request,
+			name: "x-opencut-video-bitrate",
+		});
+		const bitrateMode = request.headers.get("x-opencut-bitrate-mode");
+		let videoTranscodeArgs: string[] = [];
+		if (videoBitrate !== undefined) {
+			if (!(bitrateMode === "variable" || bitrateMode === "constant")) {
+				throw new Error("x-opencut-bitrate-mode must be variable or constant");
+			}
+			videoTranscodeArgs = [
+				"--video-bitrate",
+				String(videoBitrate),
+				"--bitrate-mode",
+				bitrateMode,
+				"--fps-numerator",
+				String(
+					positiveIntegerHeader({
+						request,
+						name: "x-opencut-fps-numerator",
+					}),
+				),
+				"--fps-denominator",
+				String(
+					positiveIntegerHeader({
+						request,
+						name: "x-opencut-fps-denominator",
+					}),
+				),
+			];
+		} else if (bitrateMode !== null) {
+			throw new Error(
+				"x-opencut-bitrate-mode requires x-opencut-video-bitrate",
+			);
+		}
+		const browserSpec = body === null ? null : exportSchema.parse(body);
+		const spec = browserSpec
+			? {
+					durationSeconds: browserSpec.durationSeconds,
+					sampleRate: browserSpec.sampleRate,
+					clips: browserSpec.clips.map(({ sourceId, ...clip }) => ({
+						...clip,
+						source: sourcePath({ sessionId: routeSessionId, sourceId }),
+					})),
+				}
+			: null;
 		const specPath = join(directory, "audio-spec.json");
 		const videoPath = join(directory, "video.mp4");
 		const outputPath = join(directory, "export.mp4");
-		await writeFile(specPath, JSON.stringify(spec));
+		if (spec) await writeFile(specPath, JSON.stringify(spec));
 		await runMediaEngine({
 			args: [
 				"mux-export",
 				"--video",
 				videoPath,
-				"--spec",
-				specPath,
 				"--output",
 				outputPath,
+				...(spec ? ["--spec", specPath] : []),
+				...videoTranscodeArgs,
 			],
 		});
 		return await fileResponse({
@@ -78,4 +119,32 @@ export async function POST(
 		if (sessionId) await removeExportSession(sessionId);
 		return nativeMediaError(error);
 	}
+}
+
+function optionalPositiveIntegerHeader({
+	request,
+	name,
+}: {
+	request: Request;
+	name: string;
+}): number | undefined {
+	const value = request.headers.get(name);
+	if (value === null) return undefined;
+	const parsed = Number(value);
+	if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+		throw new Error(`${name} must be a positive integer`);
+	}
+	return parsed;
+}
+
+function positiveIntegerHeader({
+	request,
+	name,
+}: {
+	request: Request;
+	name: string;
+}): number {
+	const value = optionalPositiveIntegerHeader({ request, name });
+	if (value === undefined) throw new Error(`${name} is required`);
+	return value;
 }

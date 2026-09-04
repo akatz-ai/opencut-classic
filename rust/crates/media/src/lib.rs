@@ -2,7 +2,7 @@ use std::{
     collections::BTreeMap,
     env, fs,
     path::{Path, PathBuf},
-    process::{Command, Output},
+    process::{Command, Output, Stdio},
 };
 
 use anyhow::{bail, Context, Result};
@@ -48,6 +48,25 @@ pub struct ProxyResult {
     pub video_codec: String,
     pub audio_codec: Option<String>,
     pub hardware_encoded: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct RawVideoOptions {
+    pub output: PathBuf,
+    pub width: u32,
+    pub height: u32,
+    pub fps_numerator: u32,
+    pub fps_denominator: u32,
+    pub bitrate: u64,
+    pub constant_bitrate: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct VideoTranscodeOptions {
+    pub fps_numerator: u32,
+    pub fps_denominator: u32,
+    pub bitrate: u64,
+    pub constant_bitrate: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -207,8 +226,20 @@ impl MediaEngine {
         })
     }
 
-    pub fn mux_export(&self, video: &Path, output: &Path, spec: Option<&ExportSpec>) -> Result<()> {
+    pub fn mux_export(
+        &self,
+        video: &Path,
+        output: &Path,
+        spec: Option<&ExportSpec>,
+        video_transcode: Option<&VideoTranscodeOptions>,
+    ) -> Result<()> {
         validate_input_file(video)?;
+        if let Some(options) = video_transcode {
+            validate_video_transcode_options(options)?;
+            if !self.health()?.h264_nvenc {
+                bail!("h264_nvenc is unavailable");
+            }
+        }
         if let Some(parent) = output.parent() {
             fs::create_dir_all(parent)
                 .with_context(|| format!("failed to create {}", parent.display()))?;
@@ -228,11 +259,25 @@ impl MediaEngine {
             command
                 .arg("-filter_complex")
                 .arg(filter)
-                .args(["-map", "0:v:0", "-map", "[aout]"])
-                .args(["-c:v", "copy", "-c:a", "aac", "-b:a", DEFAULT_AUDIO_BITRATE])
+                .args(["-map", "0:v:0", "-map", "[aout]"]);
+            if let Some(options) = video_transcode {
+                command.args(nvenc_video_args(options));
+            } else {
+                command.args(["-c:v", "copy"]);
+            }
+            command
+                .args(["-c:a", "aac", "-b:a", DEFAULT_AUDIO_BITRATE])
                 .args(["-movflags", "+faststart", "-shortest"]);
         } else {
-            command.args(["-map", "0:v:0", "-c:v", "copy", "-an"]);
+            command.args(["-map", "0:v:0", "-map", "0:a?"]);
+            if let Some(options) = video_transcode {
+                command
+                    .args(nvenc_video_args(options))
+                    .args(["-c:a", "copy"]);
+            } else {
+                command.args(["-c", "copy"]);
+            }
+            command.args(["-movflags", "+faststart"]);
         }
 
         let result = command
@@ -240,6 +285,26 @@ impl MediaEngine {
             .output()
             .with_context(|| format!("failed to run {}", self.ffmpeg.display()))?;
         ensure_success(&result, "FFmpeg export mux")
+    }
+
+    pub fn encode_raw_video(&self, options: &RawVideoOptions) -> Result<()> {
+        validate_raw_video_options(options)?;
+        if !self.health()?.h264_nvenc {
+            bail!("h264_nvenc is unavailable");
+        }
+        if let Some(parent) = options.output.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create {}", parent.display()))?;
+        }
+        let _ = fs::remove_file(&options.output);
+
+        let args = raw_video_args(options);
+        let result = Command::new(&self.ffmpeg)
+            .args(&args)
+            .stdin(Stdio::inherit())
+            .output()
+            .with_context(|| format!("failed to run {}", self.ffmpeg.display()))?;
+        ensure_success(&result, "FFmpeg NVENC export")
     }
 
     fn run_proxy_command(&self, options: &ProxyOptions, hardware: bool) -> Result<Output> {
@@ -310,6 +375,105 @@ impl MediaEngine {
         ensure_success(&output, "FFprobe")?;
         serde_json::from_slice(&output.stdout).context("failed to parse FFprobe JSON")
     }
+}
+
+fn validate_raw_video_options(options: &RawVideoOptions) -> Result<()> {
+    if options.width < 2
+        || options.height < 2
+        || !options.width.is_multiple_of(2)
+        || !options.height.is_multiple_of(2)
+    {
+        bail!("raw video dimensions must be positive even numbers");
+    }
+    if options.fps_numerator == 0 || options.fps_denominator == 0 {
+        bail!("raw video frame rate must be positive");
+    }
+    if !(100_000..=200_000_000).contains(&options.bitrate) {
+        bail!("raw video bitrate is outside the supported range");
+    }
+    Ok(())
+}
+
+fn validate_video_transcode_options(options: &VideoTranscodeOptions) -> Result<()> {
+    if options.fps_numerator == 0 || options.fps_denominator == 0 {
+        bail!("video transcode frame rate must be positive");
+    }
+    if !(100_000..=200_000_000).contains(&options.bitrate) {
+        bail!("video transcode bitrate is outside the supported range");
+    }
+    Ok(())
+}
+
+fn raw_video_args(options: &RawVideoOptions) -> Vec<String> {
+    let mut args = vec![
+        "-hide_banner".into(),
+        "-loglevel".into(),
+        "error".into(),
+        "-y".into(),
+        "-f".into(),
+        "rawvideo".into(),
+        "-pixel_format".into(),
+        "bgra".into(),
+        "-video_size".into(),
+        format!("{}x{}", options.width, options.height),
+        "-framerate".into(),
+        format!("{}/{}", options.fps_numerator, options.fps_denominator),
+        "-i".into(),
+        "pipe:0".into(),
+        "-an".into(),
+    ];
+    args.extend(nvenc_video_args(&VideoTranscodeOptions {
+        fps_numerator: options.fps_numerator,
+        fps_denominator: options.fps_denominator,
+        bitrate: options.bitrate,
+        constant_bitrate: options.constant_bitrate,
+    }));
+    args.extend([
+        "-movflags".into(),
+        "+faststart".into(),
+        options.output.display().to_string(),
+    ]);
+    args
+}
+
+fn nvenc_video_args(options: &VideoTranscodeOptions) -> Vec<String> {
+    let max_rate = if options.constant_bitrate {
+        options.bitrate
+    } else {
+        options.bitrate.saturating_mul(3) / 2
+    };
+    let buffer_size = options.bitrate.saturating_mul(2);
+    let keyframe_interval =
+        (u64::from(options.fps_numerator) * 2 / u64::from(options.fps_denominator)).max(1);
+    vec![
+        "-c:v".into(),
+        "h264_nvenc".into(),
+        "-preset".into(),
+        "p4".into(),
+        "-tune".into(),
+        "hq".into(),
+        "-rc".into(),
+        if options.constant_bitrate {
+            "cbr"
+        } else {
+            "vbr"
+        }
+        .into(),
+        "-multipass".into(),
+        "qres".into(),
+        "-b:v".into(),
+        options.bitrate.to_string(),
+        "-maxrate".into(),
+        max_rate.to_string(),
+        "-bufsize".into(),
+        buffer_size.to_string(),
+        "-g".into(),
+        keyframe_interval.to_string(),
+        "-bf".into(),
+        "2".into(),
+        "-pix_fmt".into(),
+        "yuv420p".into(),
+    ]
 }
 
 fn build_audio_filter(spec: &ExportSpec) -> Result<(Vec<PathBuf>, String)> {
@@ -518,5 +682,38 @@ mod tests {
         assert!(filter.contains("adelay=5000:all=1"));
         assert!(filter.contains("amix=inputs=2"));
         assert!(filter.ends_with("atrim=duration=10[aout]"));
+    }
+
+    #[test]
+    fn raw_video_uses_bgra_nvenc_and_requested_bitrate() {
+        let options = RawVideoOptions {
+            output: PathBuf::from("output.mp4"),
+            width: 2560,
+            height: 1440,
+            fps_numerator: 60,
+            fps_denominator: 1,
+            bitrate: 12_000_000,
+            constant_bitrate: false,
+        };
+        let args = raw_video_args(&options);
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["-pixel_format", "bgra"]));
+        assert!(args.windows(2).any(|pair| pair == ["-c:v", "h264_nvenc"]));
+        assert!(args.windows(2).any(|pair| pair == ["-b:v", "12000000"]));
+        assert!(args.windows(2).any(|pair| pair == ["-g", "120"]));
+    }
+
+    #[test]
+    fn nvenc_constant_bitrate_uses_strict_target_rate() {
+        let args = nvenc_video_args(&VideoTranscodeOptions {
+            fps_numerator: 30,
+            fps_denominator: 1,
+            bitrate: 3_000_000,
+            constant_bitrate: true,
+        });
+        assert!(args.windows(2).any(|pair| pair == ["-rc", "cbr"]));
+        assert!(args.windows(2).any(|pair| pair == ["-maxrate", "3000000"]));
+        assert!(args.windows(2).any(|pair| pair == ["-g", "60"]));
     }
 }

@@ -1,6 +1,9 @@
 import { removeExportSession } from "@/server/native-media/export-session";
 import { nativeMediaError } from "@/server/native-media/responses";
-import { requireLocalNativeRequest } from "@/server/native-media/engine";
+import {
+	cancelMediaEngineStream,
+	requireLocalNativeRequest,
+} from "@/server/native-media/engine";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -14,6 +17,7 @@ export async function DELETE(
 	try {
 		requireLocalNativeRequest(request);
 		const { sessionId } = await params;
+		await cancelMediaEngineStream({ key: sessionId });
 		await removeExportSession(sessionId);
 		return new Response(null, { status: 204 });
 	} catch (error) {

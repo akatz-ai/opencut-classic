@@ -8,10 +8,13 @@ import type {
 } from "@/agent-bridge/types";
 import type { EditorCore } from "@/core";
 import { useEditor } from "@/editor/use-editor";
-import { frameRateToFloat } from "@/fps/utils";
+import { floatToFrameRate, frameRateToFloat } from "@/fps/utils";
 import { mediaTimeFromSeconds, TICKS_PER_SECOND } from "@/wasm";
 import { TracksSnapshotCommand } from "@/commands/timeline";
 import type { SceneTracks } from "@/timeline";
+import type { ExportOptions } from "@/export";
+import type { StreamTargetChunk } from "mediabunny";
+import { NativeExportSession } from "@/services/native-media/client";
 
 const STATE_HEARTBEAT_MS = 1000;
 const COMMAND_POLL_MS = 350;
@@ -64,7 +67,8 @@ export function AgentBridge() {
 			} catch (error) {
 				console.warn("[agent-bridge] Command poll failed:", error);
 			} finally {
-				if (!disposed) pollTimer = setTimeout(() => void poll(), COMMAND_POLL_MS);
+				if (!disposed)
+					pollTimer = setTimeout(() => void poll(), COMMAND_POLL_MS);
 			}
 		};
 
@@ -169,7 +173,11 @@ function readCommand(value: unknown): AgentBridgeCommand | null {
 		!("id" in command) ||
 		typeof command.id !== "string" ||
 		!("kind" in command) ||
-		!(command.kind === "stage_media" || command.kind === "apply_cut_plan")
+		!(
+			command.kind === "stage_media" ||
+			command.kind === "apply_cut_plan" ||
+			command.kind === "export_project"
+		)
 	) {
 		return null;
 	}
@@ -222,8 +230,10 @@ async function executeAgentCommand({
 		let commandResult: Record<string, unknown>;
 		if (command.kind === "stage_media") {
 			commandResult = await stageMedia({ editor, payload: command.payload });
-		} else {
+		} else if (command.kind === "apply_cut_plan") {
 			commandResult = await applyCutPlan({ editor, payload: command.payload });
+		} else {
+			commandResult = await exportProject({ editor, payload: command.payload });
 		}
 		await editor.save.flush();
 		const after = buildAgentSnapshot({ editor });
@@ -259,11 +269,14 @@ async function stageMedia({
 }): Promise<Record<string, unknown>> {
 	const mediaId = payload.mediaId;
 	if (typeof mediaId !== "string") throw new Error("mediaId is required");
-	const asset = editor.media.getAssets().find((candidate) => candidate.id === mediaId);
+	const asset = editor.media
+		.getAssets()
+		.find((candidate) => candidate.id === mediaId);
 	if (!asset) throw new Error(`Media asset ${mediaId} was not found`);
 	const preferProxy = payload.preferProxy === true;
 	const stagedFile = preferProxy && asset.proxy ? asset.proxy.file : asset.file;
-	const stagedName = preferProxy && asset.proxy ? `${asset.name}.proxy.mp4` : asset.name;
+	const stagedName =
+		preferProxy && asset.proxy ? `${asset.name}.proxy.mp4` : asset.name;
 	const projectId = editor.project.getActive().metadata.id;
 	const query = new URLSearchParams({
 		projectId,
@@ -286,7 +299,8 @@ async function applyCutPlan({
 	editor: EditorCore;
 	payload: Record<string, unknown>;
 }): Promise<Record<string, unknown>> {
-	if (!Array.isArray(payload.ranges)) throw new Error("ranges must be an array");
+	if (!Array.isArray(payload.ranges))
+		throw new Error("ranges must be an array");
 	const ranges = payload.ranges.map((value) => {
 		if (
 			typeof value !== "object" ||
@@ -349,4 +363,136 @@ async function applyCutPlan({
 		createdElementIds: nativeResult.createdElementIds,
 		rangeCount: ranges.length,
 	};
+}
+
+async function exportProject({
+	editor,
+	payload,
+}: {
+	editor: EditorCore;
+	payload: Record<string, unknown>;
+}): Promise<Record<string, unknown>> {
+	const width = positiveInteger({ value: payload.width, label: "width" });
+	const height = positiveInteger({ value: payload.height, label: "height" });
+	const fps = positiveNumber({ value: payload.fps, label: "fps" });
+	const videoBitrate = positiveInteger({
+		value: payload.videoBitrate,
+		label: "videoBitrate",
+	});
+	const includeAudio = payload.includeAudio !== false;
+	const bitrateMode =
+		payload.bitrateMode === "constant" ? "constant" : "variable";
+	const encoder =
+		payload.encoder === "native_nvenc" ? "native_nvenc" : "webcodecs";
+	const filename =
+		typeof payload.filename === "string" && payload.filename.trim()
+			? payload.filename
+			: "opencut-agent-export.mp4";
+	let artifact: Record<string, unknown> | null = null;
+	const stageArtifact = async (stream: ReadableStream<Uint8Array>) => {
+		const projectId = editor.project.getActive().metadata.id;
+		const query = new URLSearchParams({
+			projectId,
+			mediaId: "render",
+			filename,
+		});
+		const body = await new Response(stream).blob();
+		const response = await fetch(`/api/agent-bridge/artifacts?${query}`, {
+			method: "POST",
+			body,
+		});
+		if (!response.ok) {
+			throw new Error(`Export artifact staging failed: ${response.status}`);
+		}
+		const value: unknown = await response.json();
+		if (typeof value !== "object" || value === null) {
+			throw new Error("Export artifact response is invalid");
+		}
+		artifact = Object.fromEntries(Object.entries(value));
+	};
+	let browserCaptureSession: NativeExportSession | null = null;
+	let browserCaptureCompleted = false;
+	try {
+		browserCaptureSession =
+			encoder === "webcodecs" ? await NativeExportSession.start() : null;
+		const unavailableWritable = new WritableStream<StreamTargetChunk>({
+			write: () => {
+				throw new Error("The selected export encoder has no video destination");
+			},
+		});
+		const result = await editor.project.export({
+			options: {
+				format: "mp4",
+				quality: "high",
+				fps: floatToFrameRate(fps),
+				includeAudio,
+				width,
+				height,
+				videoBitrate,
+				bitrateMode,
+				encoder,
+			} satisfies ExportOptions,
+			destination: browserCaptureSession
+				? { writable: browserCaptureSession.createVideoDestination() }
+				: {
+						writable: unavailableWritable,
+						writeResponse: stageArtifact,
+					},
+		});
+		if (!result.success) {
+			throw new Error(
+				result.cancelled
+					? "Agent export was cancelled"
+					: (result.error ?? "Agent export failed"),
+			);
+		}
+		if (browserCaptureSession) {
+			const response = await browserCaptureSession.finalize({
+				spec: null,
+				videoTranscode:
+					bitrateMode === "constant"
+						? {
+								fps: floatToFrameRate(fps),
+								bitrate: videoBitrate,
+								bitrateMode,
+							}
+						: undefined,
+			});
+			if (!response.body) throw new Error("Browser export artifact is missing");
+			await stageArtifact(response.body);
+			browserCaptureCompleted = true;
+		}
+		if (!artifact) throw new Error("Agent export did not produce an artifact");
+		return { ...result, encoder, artifact };
+	} finally {
+		if (browserCaptureSession && !browserCaptureCompleted) {
+			await browserCaptureSession.cancel();
+		}
+	}
+}
+
+function positiveInteger({
+	value,
+	label,
+}: {
+	value: unknown;
+	label: string;
+}): number {
+	if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
+		throw new Error(`${label} must be a positive integer`);
+	}
+	return value;
+}
+
+function positiveNumber({
+	value,
+	label,
+}: {
+	value: unknown;
+	label: string;
+}): number {
+	if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+		throw new Error(`${label} must be a positive number`);
+	}
+	return value;
 }

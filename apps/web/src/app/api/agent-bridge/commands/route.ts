@@ -31,7 +31,13 @@ export async function POST(request: Request) {
 			payload?: Record<string, unknown>;
 			expectedRevision?: string;
 		} = await request.json();
-		if (!(body.kind === "stage_media" || body.kind === "apply_cut_plan")) {
+		if (
+			!(
+				body.kind === "stage_media" ||
+				body.kind === "apply_cut_plan" ||
+				body.kind === "export_project"
+			)
+		) {
 			throw new Error("Unsupported agent command");
 		}
 		return Response.json({

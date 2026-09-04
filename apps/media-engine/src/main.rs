@@ -1,7 +1,10 @@
 use std::{env, fs, path::PathBuf};
 
 use anyhow::{bail, Context, Result};
-use media::{apply_timeline_cuts, CutRange, ExportSpec, MediaEngine, ProxyOptions};
+use media::{
+    apply_timeline_cuts, CutRange, ExportSpec, MediaEngine, ProxyOptions, RawVideoOptions,
+    VideoTranscodeOptions,
+};
 
 fn main() {
     if let Err(error) = run() {
@@ -41,7 +44,30 @@ fn run() -> Result<()> {
                     serde_json::from_slice(&bytes).context("failed to parse export spec")
                 })
                 .transpose()?;
-            engine.mux_export(&video, &output, spec.as_ref())?;
+            let video_transcode = options
+                .get("video-bitrate")
+                .map(|_| -> Result<VideoTranscodeOptions> {
+                    Ok(VideoTranscodeOptions {
+                        fps_numerator: required_u32(&options, "fps-numerator")?,
+                        fps_denominator: required_u32(&options, "fps-denominator")?,
+                        bitrate: required_u64(&options, "video-bitrate")?,
+                        constant_bitrate: constant_bitrate(&options)?,
+                    })
+                })
+                .transpose()?;
+            engine.mux_export(&video, &output, spec.as_ref(), video_transcode.as_ref())?;
+            println!("{}", serde_json::json!({ "success": true }));
+        }
+        "encode-raw-video" => {
+            engine.encode_raw_video(&RawVideoOptions {
+                output: required_path(&options, "output")?,
+                width: required_u32(&options, "width")?,
+                height: required_u32(&options, "height")?,
+                fps_numerator: required_u32(&options, "fps-numerator")?,
+                fps_denominator: required_u32(&options, "fps-denominator")?,
+                bitrate: required_u64(&options, "bitrate")?,
+                constant_bitrate: constant_bitrate(&options)?,
+            })?;
             println!("{}", serde_json::json!({ "success": true }));
         }
         "apply-cuts" => {
@@ -95,4 +121,28 @@ fn optional_u32(
         .map(|value| value.parse().with_context(|| format!("invalid --{key}")))
         .transpose()
         .map(|value| value.unwrap_or(fallback))
+}
+
+fn required_u32(options: &std::collections::BTreeMap<String, String>, key: &str) -> Result<u32> {
+    options
+        .get(key)
+        .with_context(|| format!("missing --{key}"))?
+        .parse()
+        .with_context(|| format!("invalid --{key}"))
+}
+
+fn required_u64(options: &std::collections::BTreeMap<String, String>, key: &str) -> Result<u64> {
+    options
+        .get(key)
+        .with_context(|| format!("missing --{key}"))?
+        .parse()
+        .with_context(|| format!("invalid --{key}"))
+}
+
+fn constant_bitrate(options: &std::collections::BTreeMap<String, String>) -> Result<bool> {
+    match options.get("bitrate-mode").map(String::as_str) {
+        None | Some("variable") => Ok(false),
+        Some("constant") => Ok(true),
+        Some(value) => bail!("invalid --bitrate-mode: {value}"),
+    }
 }

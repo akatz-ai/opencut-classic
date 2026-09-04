@@ -1,4 +1,7 @@
-export type AgentCommandKind = "stage_media" | "apply_cut_plan";
+export type AgentCommandKind =
+	| "stage_media"
+	| "apply_cut_plan"
+	| "export_project";
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:3003";
 

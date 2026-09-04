@@ -1,6 +1,9 @@
 import type { SceneTracks } from "@/timeline";
 
-export type AgentCommandKind = "stage_media" | "apply_cut_plan";
+export type AgentCommandKind =
+	| "stage_media"
+	| "apply_cut_plan"
+	| "export_project";
 
 export interface AgentProjectSnapshot {
 	revision: string;

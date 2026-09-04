@@ -15,6 +15,11 @@ import {
 import { shouldMaintainPitch } from "@/retime/rate";
 import { hasAnimatedVolume } from "@/timeline/audio-state";
 import { TICKS_PER_SECOND } from "@/wasm";
+import {
+	getExportVideoBitrate,
+	getQualitySliderForPreset,
+} from "@/export/settings";
+import { frameRateToFloat } from "@/fps/utils";
 
 type SnapshotResult =
 	| { success: true; blob: Blob; filename: string }
@@ -156,10 +161,26 @@ export class RendererManager {
 	}: {
 		options: ExportOptions;
 		destination?: ExportDestination;
-		onProgress?: ({ progress }: { progress: number }) => void;
+		onProgress?: ({
+			progress,
+			frameProgress,
+		}: {
+			progress: number;
+			frameProgress?: number;
+		}) => void;
 		onCancel?: () => boolean;
 	}): Promise<ExportResult> {
-		const { format, quality, fps, includeAudio } = options;
+		const {
+			format,
+			quality,
+			fps,
+			includeAudio,
+			width,
+			height,
+			videoBitrate,
+			encoder = "auto",
+			bitrateMode = "variable",
+		} = options;
 
 		try {
 			const tracks = this.editor.scenes.getActiveScene().tracks;
@@ -177,6 +198,29 @@ export class RendererManager {
 
 			const exportFps = fps ?? activeProject.settings.fps;
 			const canvasSize = activeProject.settings.canvasSize;
+			const outputSize = {
+				width: width ?? canvasSize.width,
+				height: height ?? canvasSize.height,
+			};
+			if (
+				!Number.isSafeInteger(outputSize.width) ||
+				!Number.isSafeInteger(outputSize.height) ||
+				outputSize.width < 2 ||
+				outputSize.height < 2 ||
+				outputSize.width % 2 !== 0 ||
+				outputSize.height % 2 !== 0
+			) {
+				throw new Error("Export dimensions must be positive even integers");
+			}
+			const resolvedVideoBitrate =
+				videoBitrate ??
+				getExportVideoBitrate({
+					width: outputSize.width,
+					height: outputSize.height,
+					fps: frameRateToFloat(exportFps),
+					quality: getQualitySliderForPreset(quality),
+					format,
+				});
 			const nativeMediaHealth =
 				format === "mp4" && destination?.writeResponse
 					? await getNativeMediaHealth()
@@ -187,15 +231,48 @@ export class RendererManager {
 			const hasAnimatedAudio = nativeAudioClips.some((clip) =>
 				hasAnimatedVolume({ element: clip.timelineElement }),
 			);
-			const shouldUseNativeExport = Boolean(
-				includeAudio &&
-					nativeMediaHealth?.available &&
-					destination?.writeResponse &&
-					!hasAnimatedAudio,
+			const shouldUseNativeRawVideo = Boolean(
+				format === "mp4" &&
+				nativeMediaHealth?.h264Nvenc &&
+				destination?.writeResponse &&
+				!hasAnimatedAudio &&
+				encoder === "native_nvenc",
 			);
+			const shouldUseNativeAudioMix = Boolean(
+				includeAudio &&
+				format === "mp4" &&
+				nativeMediaHealth?.available &&
+				destination?.writeResponse &&
+				!hasAnimatedAudio,
+			);
+			const shouldUseNativeRateControl = Boolean(
+				format === "mp4" &&
+				bitrateMode === "constant" &&
+				nativeMediaHealth?.h264Nvenc &&
+				destination?.writeResponse &&
+				!shouldUseNativeRawVideo,
+			);
+			if (encoder === "native_nvenc" && !shouldUseNativeRawVideo) {
+				throw new Error(
+					"NVIDIA NVENC export is unavailable for these settings or this browser",
+				);
+			}
+			if (
+				bitrateMode === "constant" &&
+				!shouldUseNativeRawVideo &&
+				!shouldUseNativeRateControl
+			) {
+				throw new Error(
+					"Predictable constant-bitrate MP4 export requires the local NVIDIA media engine",
+				);
+			}
 
 			let audioBuffer: AudioBuffer | null = null;
-			if (includeAudio && !shouldUseNativeExport) {
+			if (
+				includeAudio &&
+				!shouldUseNativeRawVideo &&
+				!shouldUseNativeAudioMix
+			) {
 				onProgress?.({ progress: 0.05 });
 				audioBuffer = await createTimelineAudioBuffer({
 					tracks,
@@ -214,29 +291,52 @@ export class RendererManager {
 
 			let nativeSession: NativeExportSession | null = null;
 			let nativeExportCompleted = false;
-			if (shouldUseNativeExport) {
+			if (
+				shouldUseNativeRawVideo ||
+				shouldUseNativeAudioMix ||
+				shouldUseNativeRateControl
+			) {
 				nativeSession = await NativeExportSession.start();
 			}
+			const nativeVideoSink = shouldUseNativeRawVideo
+				? nativeSession?.createNvencVideoSink({
+						width: outputSize.width,
+						height: outputSize.height,
+						fps: exportFps,
+						bitrate: resolvedVideoBitrate,
+						bitrateMode,
+					})
+				: undefined;
 			const exporter = new SceneExporter({
 				width: canvasSize.width,
 				height: canvasSize.height,
+				outputWidth: outputSize.width,
+				outputHeight: outputSize.height,
 				fps: exportFps,
 				format,
 				quality,
-				shouldIncludeAudio: !!includeAudio && !shouldUseNativeExport,
+				shouldIncludeAudio:
+					!!includeAudio &&
+					!shouldUseNativeRawVideo &&
+					!shouldUseNativeAudioMix,
 				audioBuffer: audioBuffer || undefined,
+				videoBitrate: resolvedVideoBitrate,
+				bitrateMode,
+				nativeVideoSink,
 				destination: nativeSession
 					? { writable: nativeSession.createVideoDestination() }
 					: destination,
 			});
 
 			exporter.on("progress", (progress) => {
-				const adjustedProgress = includeAudio && !shouldUseNativeExport
-					? 0.05 + progress * 0.95
-					: shouldUseNativeExport
-						? progress * 0.9
-						: progress;
-				onProgress?.({ progress: adjustedProgress });
+				const audioStart =
+					includeAudio && !shouldUseNativeRawVideo && !shouldUseNativeAudioMix
+						? 0.05
+						: 0;
+				const adjustedProgress = nativeSession
+					? audioStart + progress * (0.9 - audioStart)
+					: audioStart + progress * (1 - audioStart);
+				onProgress?.({ progress: adjustedProgress, frameProgress: progress });
 			});
 
 			let cancelled = false;
@@ -265,7 +365,9 @@ export class RendererManager {
 
 				if (nativeSession && destination?.writeResponse) {
 					onProgress?.({ progress: 0.92 });
-					const clips: NativeAudioClip[] = nativeAudioClips
+					const clips: NativeAudioClip[] = (
+						shouldUseNativeAudioMix ? nativeAudioClips : []
+					)
 						.filter((clip) => !clip.muted)
 						.map((clip) => ({
 							sourceKey: clip.sourceKey,
@@ -281,11 +383,20 @@ export class RendererManager {
 							volume: clip.volume,
 						}));
 					const response = await nativeSession.finalize({
-						spec: {
-							durationSeconds: duration / TICKS_PER_SECOND,
-							sampleRate: 48_000,
-							clips,
-						},
+						spec: shouldUseNativeAudioMix
+							? {
+									durationSeconds: duration / TICKS_PER_SECOND,
+									sampleRate: 48_000,
+									clips,
+								}
+							: null,
+						videoTranscode: shouldUseNativeRateControl
+							? {
+									fps: exportFps,
+									bitrate: resolvedVideoBitrate,
+									bitrateMode,
+								}
+							: undefined,
 					});
 					if (!response.body) {
 						throw new Error("Native export response body is missing");

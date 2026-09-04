@@ -16,8 +16,8 @@ undo behavior.
   adjustment, and global ripple logic.
 
 The current tools can inspect projects, stage original or proxy media for local
-analysis, return visual contact sheets, and apply a reviewed cut plan as one
-undoable command.
+analysis, return visual contact sheets, apply a reviewed cut plan as one
+undoable command, and render a revision-checked MP4 artifact.
 
 ## CLI
 
@@ -26,6 +26,24 @@ bun apps/agent/src/cli.ts projects
 bun apps/agent/src/cli.ts inspect --project <project-id>
 bun apps/agent/src/cli.ts stage-media --project <project-id> --media <media-id>
 ```
+
+Export the exact inspected revision with explicit output parameters:
+
+```sh
+bun apps/agent/src/cli.ts export-project \
+  --project <project-id> \
+  --expected-revision <revision> \
+  --width 1920 --height 1080 --fps 30 \
+  --video-bitrate 3000000 \
+  --bitrate-mode variable \
+  --encoder webcodecs \
+  --filename project-export.mp4
+```
+
+`--bitrate-mode constant` adds the native NVENC finishing pass for predictable
+size. `--encoder native_nvenc` selects the experimental raw BGRA-to-NVENC path;
+WebCodecs is the measured-fast default. Add `--no-audio` only when a silent
+artifact is intentional.
 
 Generate a verbatim transcript to identify candidate words. Raw Whisper word
 timestamps are search hints only; they must never be used directly as edit
@@ -125,10 +143,12 @@ The adapter exposes:
 - `stage_media`
 - `media_contact_sheet`
 - `apply_cut_plan`
+- `export_project`
 
 `apply_cut_plan` requires an exact revision and is marked as a destructive,
-non-idempotent MCP tool. The server instructions require inspection and a
-reviewed plan before use.
+non-idempotent MCP tool. `export_project` also requires an exact revision but
+does not mutate the project. The server instructions require inspection and a
+reviewed plan before timeline edits.
 
 ## Current limits
 

@@ -37,6 +37,13 @@ bandwidth required by high-resolution and long-GOP sources.
   [`#484`](https://github.com/OpenCut-app/OpenCut/pull/484) is an unconnected
   Tauri shell. None supplied adaptive rendering, short-GOP proxies, bounded
   native audio export, or the current FFmpeg engine.
+- A third audit found two useful UX ideas in the current rewrite: PR
+  [`#773`](https://github.com/OpenCut-app/OpenCut/pull/773) reports rendered
+  frame count, elapsed time, and ETA, while PR
+  [`#765`](https://github.com/OpenCut-app/OpenCut/pull/765) introduces common
+  platform output presets. This fork adapted those ideas to Classic's export
+  manager, but neither PR implements Classic's renderer, native media path, or
+  bitrate/size controls.
 
 ## Changes in this pass
 
@@ -58,6 +65,9 @@ bandwidth required by high-resolution and long-GOP sources.
   `window.__renderPerfSnapshot()`.
 - Tests use a Node-targeted build of the real Rust/WASM module rather than a
   duplicated JavaScript mock.
+- Export now exposes aspect-preserving 2160p, 1440p, 1080p, and 720p presets,
+  project/60/30/24 fps choices, a 1-100 quality slider, variable or predictable
+  rate control, an estimated size, frame count, elapsed time, and ETA.
 
 ## Adaptive preview and proxies
 
@@ -99,6 +109,44 @@ Because Classic stores originals in browser OPFS, audio sources must currently
 stream once into the native session; a future native shell can replace that
 transfer with direct file-path access.
 
+## Export throughput and rate control
+
+`Auto` uses browser WebCodecs for compositing and first-pass H.264 encoding.
+That remains the fastest complete render path on this workstation. Linux
+Chrome sees the NVIDIA render node through VA-API for decode, but the installed
+VA-API driver does not expose an encode entry point, so Chrome cannot directly
+select NVENC.
+
+The native engine can accept compositor frames as BGRA and feed them to
+`h264_nvenc`, but this requires a full GPU-to-CPU canvas readback and browser
+HTTP transfer for every frame. On the 2560x1440/60 walkthrough project, the
+experimental path rendered 843 frames in 51 seconds (16.5 fps) while NVENC
+utilization remained near 3%. The compositor/readback boundary, not encoder
+capacity, is the bottleneck, so additional simultaneous NVENC streams would
+increase contention rather than improve one export. The UI keeps this route as
+an explicit `NVIDIA NVENC · experimental` option instead of selecting it in
+`Auto`.
+
+Predictable size uses a different hybrid path. The browser first renders the
+project normally, then the native engine performs a fast H.264 NVENC finishing
+pass over the encoded MP4. This avoids per-frame browser readback and can run in
+the same FFmpeg process as native timeline audio mixing. Variable bitrate shows
+a measured range because simple footage may use substantially less than the
+target; predictable mode shows the target estimate and promises a ±5% range.
+
+For the 681.3167-second project at 1920x1080/30 and a 3.0 Mbps target:
+
+| Path                                       | Wall time | Result                                                               |
+| ------------------------------------------ | --------: | -------------------------------------------------------------------- |
+| Browser WebCodecs VBR render               |     7m34s | 126,719,944 bytes, 1.488 Mbps                                        |
+| Browser first pass used for CBR validation |     7m08s | Chrome ignored its CBR hint and produced the byte-identical VBR file |
+| Native NVENC finishing pass                |     41.8s | 255,671,408 bytes, 3.002 Mbps                                        |
+
+The predicted no-audio size was 260,603,625 bytes. The final native result was
+1.89% smaller, inside the displayed range, and its packet stream passed an
+FFmpeg integrity check. Selecting 1080p30 alone reduced the full browser render
+from about 17m14s at 2560x1440/60 to 7m34s, a 2.28x wall-time improvement.
+
 ## Local Rust/WASM development
 
 Set `OPENCUT_LOCAL_WASM=1` in `apps/web/.env.local`, then build the local
@@ -113,15 +161,17 @@ With the flag unset, the application continues to resolve the published
 `opencut-wasm` package.
 
 On the `akatz-arch` NVIDIA/Niri workstation, the verified installed-PWA launch
-uses X11 presentation plus Chromium's shipped Vulkan/WebGPU features:
+uses native Wayland presentation and Chromium's WebGPU service:
 
 ```sh
 google-chrome-stable \
   --user-data-dir=/home/akatz/.local/share/opencut-chrome \
   --profile-directory=Default \
   --app-id=<installed-opencut-app-id> \
-  --ozone-platform=x11 \
-  --enable-features=UseOzonePlatform,VaapiVideoDecoder,VaapiVideoEncoder,Vulkan,WebGPUService,WebGPU \
+  --ozone-platform=wayland \
+  --render-node-override=/dev/dri/renderD128 \
+  --enable-features=UseOzonePlatform,VaapiVideoDecoder,VaapiVideoEncoder,WebGPUService,WebGPU \
+  --disable-features=Vulkan \
   --disable-backgrounding-occluded-windows \
   --disable-background-timer-throttling \
   --disable-renderer-backgrounding
@@ -225,16 +275,17 @@ GPU memory remained between 1.1 and 1.25 GiB during rendering and settled below
 
 1. Preserve animated-volume interpolation in the native FFmpeg filter graph so
    those exports can also leave the full-buffer browser fallback.
-2. Investigate direct `VideoFrame`/external-texture ingestion when concurrent
-   full-frame video layers become a common workload; the one-layer path now has
-   comfortable headroom.
+2. Investigate direct `VideoFrame`/external-texture or GPU-native NV12 ingestion
+   when concurrent full-frame layers become common, or when a zero-readback
+   path to NVENC becomes available; the one-layer path has comfortable preview
+   headroom and browser encoding currently beats raw BGRA transfer.
 3. Add timeline viewport virtualization only after a large synthetic timeline
    benchmark defines the current break-even point; drag, snap, and box-select
    behavior make premature virtualization risky.
 4. Move source transfer to native file-path references when Classic runs inside
    a real desktop shell.
 
-The repository-wide ESLint command still reports 106 errors and 16 warnings in
-archived code outside this pass. Changed performance files lint clean,
-TypeScript passes, the optimized Next.js build succeeds, all 238 Bun tests pass,
-and all 17 Rust workspace tests pass.
+The repository-wide ESLint command still reports pre-existing errors in
+archived code outside this pass. Changed performance/export files lint clean,
+TypeScript passes, the optimized Next.js build succeeds, all 241 Bun tests pass,
+and all 19 Rust workspace tests pass.

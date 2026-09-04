@@ -18,7 +18,8 @@ const server = new McpServer(
 server.registerTool(
 	"list_projects",
 	{
-		description: "List OpenCut projects currently connected to the local bridge.",
+		description:
+			"List OpenCut projects currently connected to the local bridge.",
 		inputSchema: {},
 		annotations: { readOnlyHint: true },
 	},
@@ -83,7 +84,11 @@ server.registerTool(
 			content: [
 				{
 					type: "text" as const,
-					text: JSON.stringify({ sheetPath, timesSeconds: times_seconds }, null, 2),
+					text: JSON.stringify(
+						{ sheetPath, timesSeconds: times_seconds },
+						null,
+						2,
+					),
 				},
 				{ type: "image" as const, data, mimeType: "image/jpeg" },
 			],
@@ -121,6 +126,61 @@ server.registerTool(
 				kind: "apply_cut_plan",
 				payload: { ranges },
 				expectedRevision: expected_revision,
+			}),
+		),
+);
+
+server.registerTool(
+	"export_project",
+	{
+		description:
+			"Render the live OpenCut project and return a temporary local MP4 artifact path. Browser WebCodecs is the measured-fast default; native NVIDIA NVENC is experimental.",
+		inputSchema: {
+			project_id: z.string(),
+			expected_revision: z.string(),
+			width: z.number().int().positive().default(1920),
+			height: z.number().int().positive().default(1080),
+			fps: z.number().positive().default(30),
+			video_bitrate: z.number().int().min(100_000).max(200_000_000),
+			bitrate_mode: z.enum(["variable", "constant"]).default("variable"),
+			encoder: z.enum(["webcodecs", "native_nvenc"]).default("webcodecs"),
+			include_audio: z.boolean().default(true),
+			filename: z.string().default("opencut-agent-export.mp4"),
+		},
+		annotations: {
+			readOnlyHint: false,
+			destructiveHint: false,
+			idempotentHint: false,
+		},
+	},
+	async ({
+		project_id,
+		expected_revision,
+		width,
+		height,
+		fps,
+		video_bitrate,
+		bitrate_mode,
+		encoder,
+		include_audio,
+		filename,
+	}) =>
+		toolResult(
+			await runCommand({
+				projectId: project_id,
+				kind: "export_project",
+				expectedRevision: expected_revision,
+				payload: {
+					width,
+					height,
+					fps,
+					videoBitrate: video_bitrate,
+					bitrateMode: bitrate_mode,
+					encoder,
+					includeAudio: include_audio,
+					filename,
+				},
+				timeoutMs: 4 * 60 * 60 * 1000,
 			}),
 		),
 );
@@ -166,7 +226,10 @@ async function createContactSheet({
 	const directory = await mkdtemp(join(tmpdir(), "opencut-contact-sheet-"));
 	const frames = times.map((time, index) => ({
 		time,
-		path: join(directory, `${String(index + 1).padStart(2, "0")}-${time.toFixed(3)}s.jpg`),
+		path: join(
+			directory,
+			`${String(index + 1).padStart(2, "0")}-${time.toFixed(3)}s.jpg`,
+		),
 	}));
 	let next = 0;
 	async function worker() {
@@ -213,6 +276,7 @@ async function createContactSheet({
 		"%f",
 		output,
 	]);
-	if ((await montage.exited) !== 0) throw new Error("Contact sheet assembly failed");
+	if ((await montage.exited) !== 0)
+		throw new Error("Contact sheet assembly failed");
 	return output;
 }
