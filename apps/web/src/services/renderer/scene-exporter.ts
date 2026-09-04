@@ -26,6 +26,15 @@ import type {
 } from "@/export";
 import type { NativeVideoFrameSink } from "@/services/native-media/client";
 import { CanvasRenderer } from "./canvas-renderer";
+import { wasmCompositor } from "./compositor/wasm-compositor";
+import { recoverGpuRenderer } from "./gpu-renderer";
+import {
+	ExportOperationCancelledError,
+	ExportOperationTimeoutError,
+	runExportOperation,
+	settleExportCleanup,
+	yieldToBrowser,
+} from "@/export/watchdog";
 
 type ExportParams = {
 	width: number;
@@ -51,6 +60,9 @@ const qualityMap = {
 };
 
 const STREAMING_EXPORT_CHUNK_SIZE_BYTES = 1024 * 1024;
+const EXPORT_FRAME_OPERATION_TIMEOUT_MS = 30_000;
+const EXPORT_FINALIZE_TIMEOUT_MS = 2 * 60_000;
+const EXPORT_GPU_DRAIN_INTERVAL_FRAMES = 30;
 
 export type SceneExporterEvents = {
 	progress: [progress: number];
@@ -179,40 +191,56 @@ export class SceneExporter extends EventEmitter<SceneExporterEvents> {
 		}
 
 		try {
-			await output.start();
+			await runExportOperation({
+				operation: "Starting the video encoder",
+				timeoutMs: EXPORT_FRAME_OPERATION_TIMEOUT_MS,
+				task: () => output.start(),
+				isCancelled: () => this.isCancelled,
+			});
 
-			if (audioSource && this.audioBuffer) {
-				await audioSource.add(this.audioBuffer);
+			const audioBuffer = this.audioBuffer;
+			if (audioSource && audioBuffer) {
+				await runExportOperation({
+					operation: "Encoding timeline audio",
+					timeoutMs: EXPORT_FINALIZE_TIMEOUT_MS,
+					task: () => audioSource.add(audioBuffer),
+					isCancelled: () => this.isCancelled,
+				});
 				audioSource.close();
 			}
 
 			for (let i = 0; i < frameCount; i++) {
 				if (this.isCancelled) {
-					await output.cancel();
+					await settleExportCleanup({ task: () => output.cancel() });
 					this.emit("cancelled");
 					return null;
 				}
 
 				const timeTicks = i * ticksPerFrame;
 				const timeSeconds = mediaTimeToSeconds({ time: timeTicks });
-				await this.renderer.renderToCanvas({
-					node: rootNode,
-					time: timeTicks,
-					targetCanvas: this.encodingCanvas,
+				await this.renderAndConsumeFrame({
+					rootNode,
+					frameIndex: i,
+					timeTicks,
+					consume: () => videoSource.add(timeSeconds, 1 / fpsFloat),
 				});
-				await videoSource.add(timeSeconds, 1 / fpsFloat);
 
 				this.emit("progress", i / frameCount);
 			}
 
 			if (this.isCancelled) {
-				await output.cancel();
+				await settleExportCleanup({ task: () => output.cancel() });
 				this.emit("cancelled");
 				return null;
 			}
 
 			videoSource.close();
-			await output.finalize();
+			await runExportOperation({
+				operation: "Finalizing the encoded video",
+				timeoutMs: EXPORT_FINALIZE_TIMEOUT_MS,
+				task: () => output.finalize(),
+				isCancelled: () => this.isCancelled,
+			});
 			this.emit("progress", 1);
 
 			const buffer =
@@ -235,8 +263,12 @@ export class SceneExporter extends EventEmitter<SceneExporterEvents> {
 			// MediaBunny/WebCodecs may report encoder failures asynchronously. Always
 			// cancel the output so its encoder and stream resources are released before
 			// the caller offers a retry.
-			await output.cancel().catch(() => undefined);
-			throw error;
+			await settleExportCleanup({ task: () => output.cancel() });
+			if (this.isCancelled || error instanceof ExportOperationCancelledError) {
+				this.emit("cancelled");
+				return null;
+			}
+			throw await this.recoverGpuIfNeeded(error);
 		}
 	}
 
@@ -256,30 +288,111 @@ export class SceneExporter extends EventEmitter<SceneExporterEvents> {
 		try {
 			for (let index = 0; index < frameCount; index += 1) {
 				if (this.isCancelled) {
-					await sink.cancel();
+					await settleExportCleanup({ task: () => sink.cancel() });
 					this.emit("cancelled");
 					return null;
 				}
 				const timeTicks = index * ticksPerFrame;
 				const timeSeconds = mediaTimeToSeconds({ time: timeTicks });
-				await this.renderer.renderToCanvas({
-					node: rootNode,
-					time: timeTicks,
-					targetCanvas: this.encodingCanvas,
-				});
-				await sink.add({
-					canvas: this.encodingCanvas,
-					timestampSeconds: timeSeconds,
-					durationSeconds: 1 / fpsFloat,
+				await this.renderAndConsumeFrame({
+					rootNode,
+					frameIndex: index,
+					timeTicks,
+					consume: () =>
+						sink.add({
+							canvas: this.encodingCanvas,
+							timestampSeconds: timeSeconds,
+							durationSeconds: 1 / fpsFloat,
+						}),
 				});
 				this.emit("progress", index / frameCount);
 			}
-			await sink.close();
+			await runExportOperation({
+				operation: "Finalizing the native video stream",
+				timeoutMs: EXPORT_FINALIZE_TIMEOUT_MS,
+				task: () => sink.close(),
+				isCancelled: () => this.isCancelled,
+			});
 			this.emit("progress", 1);
 			return { savedToFile: true };
 		} catch (error) {
-			await sink.cancel().catch(() => undefined);
-			throw error;
+			await settleExportCleanup({ task: () => sink.cancel() });
+			if (this.isCancelled || error instanceof ExportOperationCancelledError) {
+				this.emit("cancelled");
+				return null;
+			}
+			throw await this.recoverGpuIfNeeded(error);
 		}
 	}
+
+	private async renderAndConsumeFrame({
+		rootNode,
+		frameIndex,
+		timeTicks,
+		consume,
+	}: {
+		rootNode: RootNode;
+		frameIndex: number;
+		timeTicks: number;
+		consume: () => Promise<unknown>;
+	}): Promise<void> {
+		throwIfGpuDeviceLost();
+		const frameNumber = frameIndex + 1;
+		await runExportOperation({
+			operation: `Rendering frame ${frameNumber.toLocaleString()}`,
+			timeoutMs: EXPORT_FRAME_OPERATION_TIMEOUT_MS,
+			task: () =>
+				this.renderer.renderToCanvas({
+					node: rootNode,
+					time: timeTicks,
+					targetCanvas: this.encodingCanvas,
+				}),
+			isCancelled: () => this.isCancelled,
+		});
+		await runExportOperation({
+			operation: `Encoding frame ${frameNumber.toLocaleString()}`,
+			timeoutMs: EXPORT_FRAME_OPERATION_TIMEOUT_MS,
+			task: consume,
+			isCancelled: () => this.isCancelled,
+		});
+		if (frameNumber % EXPORT_GPU_DRAIN_INTERVAL_FRAMES === 0) {
+			await runExportOperation({
+				operation: "Waiting for submitted GPU work",
+				timeoutMs: EXPORT_FRAME_OPERATION_TIMEOUT_MS,
+				task: () => wasmCompositor.waitForSubmittedWork(),
+				isCancelled: () => this.isCancelled,
+			});
+			await yieldToBrowser();
+		}
+		throwIfGpuDeviceLost();
+	}
+
+	private async recoverGpuIfNeeded(error: unknown): Promise<Error> {
+		const deviceLostMessage = wasmCompositor.getDeviceLostMessage();
+		const timedOut = error instanceof ExportOperationTimeoutError;
+		if (!deviceLostMessage && !timedOut) {
+			return error instanceof Error ? error : new Error(String(error));
+		}
+
+		wasmCompositor.resetLocalState();
+		const recovered = await settleExportCleanup({
+			timeoutMs: 15_000,
+			task: recoverGpuRenderer,
+		});
+		const reason = deviceLostMessage
+			? `GPU device was lost: ${deviceLostMessage}`
+			: error instanceof Error
+				? error.message
+				: "GPU renderer stopped responding";
+		return new Error(
+			recovered
+				? `${reason}. The GPU renderer was restarted; retry the export.`
+				: `${reason}. Reload the editor before retrying the export.`,
+		);
+	}
+}
+
+function throwIfGpuDeviceLost(): void {
+	const message = wasmCompositor.getDeviceLostMessage();
+	if (message) throw new Error(`GPU device was lost: ${message}`);
 }

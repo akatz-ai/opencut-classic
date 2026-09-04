@@ -33,6 +33,22 @@ export function initializeGpuRenderer(): Promise<void> {
 	return initPromise;
 }
 
+export async function recoverGpuRenderer(): Promise<void> {
+	gpuAvailable = false;
+	gpuBackend = "recovering";
+	window.__opencutGpuBackend = gpuBackend;
+	const resetGpu = Reflect.get(opencutWasm, "resetGpu");
+	if (typeof resetGpu !== "function") {
+		throw new Error("This OpenCut GPU runtime cannot be restarted");
+	}
+	resetGpu();
+	initPromise = null;
+	await initializeGpuRenderer();
+	if (!gpuAvailable) {
+		throw new Error("GPU renderer could not be restarted");
+	}
+}
+
 export function isGpuAvailable(): boolean {
 	return gpuAvailable;
 }

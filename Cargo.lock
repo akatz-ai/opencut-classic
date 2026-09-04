@@ -3845,6 +3845,7 @@ dependencies = [
  "compositor",
  "console_error_panic_hook",
  "effects",
+ "futures-channel",
  "gpu",
  "js-sys",
  "masks",

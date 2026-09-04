@@ -7,6 +7,7 @@ import {
 	resizeCompositor,
 	uploadTexture,
 } from "opencut-wasm";
+import * as opencutWasm from "opencut-wasm";
 import {
 	incrementCounter,
 	isRenderPerfEnabled,
@@ -42,6 +43,7 @@ type ExternalCacheEntry = {
 
 class WasmCompositor {
 	private canvas: HTMLCanvasElement | null = null;
+	private orphanedCanvas: HTMLCanvasElement | null = null;
 	private initializedSize: { width: number; height: number } | null = null;
 	private cache = new Map<string, RenderedCacheEntry | ExternalCacheEntry>();
 
@@ -49,6 +51,12 @@ class WasmCompositor {
 		if (!this.canvas) {
 			initCompositor(width, height);
 			this.canvas = getCompositorCanvas();
+			if (this.orphanedCanvas?.parentElement) {
+				this.canvas.style.cssText = this.orphanedCanvas.style.cssText;
+				this.canvas.className = this.orphanedCanvas.className;
+				this.orphanedCanvas.replaceWith(this.canvas);
+			}
+			this.orphanedCanvas = null;
 			this.initializedSize = { width, height };
 			return;
 		}
@@ -61,6 +69,25 @@ class WasmCompositor {
 			resizeCompositor(width, height);
 			this.initializedSize = { width, height };
 		}
+	}
+
+	async waitForSubmittedWork(): Promise<void> {
+		const wait = Reflect.get(opencutWasm, "waitForGpu");
+		if (typeof wait === "function") await wait();
+	}
+
+	getDeviceLostMessage(): string | null {
+		const read = Reflect.get(opencutWasm, "getGpuDeviceLostMessage");
+		if (typeof read !== "function") return null;
+		const value: unknown = read();
+		return typeof value === "string" ? value : null;
+	}
+
+	resetLocalState(): void {
+		this.orphanedCanvas = this.canvas;
+		this.canvas = null;
+		this.initializedSize = null;
+		this.cache.clear();
 	}
 
 	getCanvas(): HTMLCanvasElement {

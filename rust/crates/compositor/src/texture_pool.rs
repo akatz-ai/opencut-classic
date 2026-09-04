@@ -34,7 +34,12 @@ impl TexturePool {
         }
 
         for (key, textures) in &mut self.available {
-            textures.truncate(max_cached_textures_for_size(*key));
+            let maximum = max_cached_textures_for_size(*key);
+            while textures.len() > maximum {
+                if let Some(texture) = textures.pop() {
+                    texture.destroy();
+                }
+            }
         }
         self.available.retain(|_, textures| !textures.is_empty());
 
@@ -52,7 +57,9 @@ impl TexturePool {
             };
 
             let should_remove = self.available.get_mut(&key).is_some_and(|textures| {
-                textures.pop();
+                if let Some(texture) = textures.pop() {
+                    texture.destroy();
+                }
                 textures.is_empty()
             });
             if should_remove {

@@ -23,7 +23,9 @@ pub struct TextureStore {
 
 impl TextureStore {
     pub fn upsert(&mut self, id: String, texture: wgpu::Texture) {
-        self.textures.insert(id, StoredTexture::new(texture));
+        if let Some(previous) = self.textures.insert(id, StoredTexture::new(texture)) {
+            previous.texture.destroy();
+        }
     }
 
     pub fn get(&self, id: &str) -> Option<&StoredTexture> {
@@ -31,6 +33,8 @@ impl TextureStore {
     }
 
     pub fn remove(&mut self, id: &str) {
-        self.textures.remove(id);
+        if let Some(stored) = self.textures.remove(id) {
+            stored.texture.destroy();
+        }
     }
 }

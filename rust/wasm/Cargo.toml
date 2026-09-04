@@ -15,6 +15,7 @@ bridge = { version = "0.1.0", path = "../crates/bridge" }
 compositor = { version = "0.1.0", path = "../crates/compositor" }
 console_error_panic_hook = "0.1.7"
 effects = { version = "0.1.0", path = "../crates/effects" }
+futures-channel = "0.3.31"
 gpu = { version = "0.1.0", path = "../crates/gpu", features = ["wasm"] }
 js-sys = "0.3.93"
 masks = { version = "0.1.0", path = "../crates/masks" }

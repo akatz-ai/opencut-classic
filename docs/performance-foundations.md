@@ -68,6 +68,10 @@ bandwidth required by high-resolution and long-GOP sources.
 - Export now exposes aspect-preserving 2160p, 1440p, 1080p, and 720p presets,
   project/60/30/24 fps choices, a 1-100 quality slider, variable or predictable
   rate control, an estimated size, frame count, elapsed time, and ETA.
+- Frame rendering, encoder writes, GPU queue drains, and finalization now have
+  operation-specific watchdogs. Cancellation remains responsive if an
+  underlying browser operation stops settling, and a lost WebGPU device is
+  explicitly discarded and reinitialized before the next preview or export.
 
 ## Adaptive preview and proxies
 
@@ -271,6 +275,32 @@ GPU memory remained between 1.1 and 1.25 GiB during rendering and settled below
 353,118,710-byte result contains 2560x1440 yuv420p H.264 at 60 fps and stereo
 48 kHz AAC; both stream and container durations are 681.3167 seconds.
 
+A later export reproduced a different failure at 63%: the encoded file stopped
+at 121,634,816 bytes, Chromium repeatedly reported `Error creating
+wgpu::Texture`, and its GPU process exited with code 133. Chromium started a new
+GPU process, but the outstanding render promise never settled, so neither the
+export nor an explicit cancellation could advance.
+
+Export operations now time out instead of waiting forever, poll cancellation
+while an operation is pending, and bound cleanup of a wedged encoder or native
+sink. Every 30 frames the renderer waits for submitted GPU work and yields a
+browser task. Rust records device-loss callbacks, can reset its compositor and
+GPU runtime, and explicitly destroys evicted or replaced textures. If the
+device is lost, the current export fails with a retryable message while the
+preview is rebuilt on a new device. Replacing the preview canvas preserves its
+CSS and class name, so recovery does not leave an intrinsically sized canvas
+clipped by the viewport.
+
+A controlled GPU-process termination during a disposable export failed in
+23.5 seconds with an explicit device-loss error. The editor then initialized a
+replacement WebGPU process and rendered a three-frame preview without a page
+reload. The 681.3167-second project subsequently completed a full 2560x1440/60
+fps silent proof export. GPU memory stayed near 1.2 GiB, the result contained
+40,879 H.264 yuv420p frames in 340,115,471 bytes, and an FFmpeg packet-integrity
+scan reported no errors. Frames extracted at 1:00 and 10:46 contained the full
+composition; the cropped live view seen during the run was the recovered
+canvas's missing CSS, not cropped export pixels.
+
 ## Deferred work
 
 1. Preserve animated-volume interpolation in the native FFmpeg filter graph so
@@ -287,5 +317,5 @@ GPU memory remained between 1.1 and 1.25 GiB during rendering and settled below
 
 The repository-wide ESLint command still reports pre-existing errors in
 archived code outside this pass. Changed performance/export files lint clean,
-TypeScript passes, the optimized Next.js build succeeds, all 241 Bun tests pass,
+TypeScript passes, the optimized Next.js build succeeds, all 254 Bun tests pass,
 and all 19 Rust workspace tests pass.

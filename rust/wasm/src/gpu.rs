@@ -1,8 +1,9 @@
 #![cfg(target_arch = "wasm32")]
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use effects::EffectPipeline;
+use futures_channel::oneshot;
 use gpu::{GpuContext, wgpu};
 use js_sys::{Object, Reflect};
 use masks::MaskFeatherPipeline;
@@ -17,6 +18,8 @@ pub(crate) struct GpuRuntime {
 
 thread_local! {
     static GPU_RUNTIME: RefCell<Option<GpuRuntime>> = const { RefCell::new(None) };
+    static GPU_DEVICE_LOST: RefCell<Option<String>> = const { RefCell::new(None) };
+    static GPU_GENERATION: Cell<u64> = const { Cell::new(0) };
 }
 
 fn set_panic_hook() {
@@ -48,6 +51,26 @@ pub async fn initialize_gpu() -> Result<(), JsValue> {
     let context = GpuContext::new()
         .await
         .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    let generation = GPU_GENERATION.with(|current| {
+        let generation = current.get().wrapping_add(1);
+        current.set(generation);
+        generation
+    });
+    GPU_DEVICE_LOST.with(|lost| lost.replace(None));
+    context
+        .device()
+        .set_device_lost_callback(move |reason, message| {
+            let is_current = GPU_GENERATION.with(|current| current.get() == generation);
+            if !is_current {
+                return;
+            }
+            let detail = if message.trim().is_empty() {
+                format!("{reason:?}")
+            } else {
+                format!("{reason:?}: {message}")
+            };
+            GPU_DEVICE_LOST.with(|lost| lost.replace(Some(detail)));
+        });
     let effects = EffectPipeline::new(&context);
     let masks = MaskFeatherPipeline::new(&context);
 
@@ -71,6 +94,41 @@ pub fn get_gpu_backend() -> Result<String, JsValue> {
             runtime.context.texture_format()
         ))
     })
+}
+
+#[wasm_bindgen(js_name = getGpuDeviceLostMessage)]
+pub fn get_gpu_device_lost_message() -> Option<String> {
+    GPU_DEVICE_LOST.with(|lost| lost.borrow().clone())
+}
+
+#[wasm_bindgen(js_name = waitForGpu)]
+pub async fn wait_for_gpu() -> Result<(), JsValue> {
+    let (sender, receiver) = oneshot::channel();
+    with_gpu_runtime(|runtime| {
+        runtime.context.queue().on_submitted_work_done(move || {
+            let _ = sender.send(());
+        });
+        Ok(())
+    })?;
+    receiver
+        .await
+        .map_err(|_| JsValue::from_str("GPU completion callback was dropped"))?;
+    if let Some(message) = get_gpu_device_lost_message() {
+        return Err(JsValue::from_str(&format!(
+            "GPU device was lost: {message}"
+        )));
+    }
+    Ok(())
+}
+
+#[wasm_bindgen(js_name = resetGpu)]
+pub fn reset_gpu() {
+    crate::compositor::reset_compositor_runtime();
+    GPU_GENERATION.with(|current| current.set(current.get().wrapping_add(1)));
+    GPU_RUNTIME.with(|runtime| {
+        runtime.replace(None);
+    });
+    GPU_DEVICE_LOST.with(|lost| lost.replace(None));
 }
 
 pub(crate) fn with_gpu_runtime<T>(

@@ -24,6 +24,12 @@ thread_local! {
     static COMPOSITOR_RUNTIME: RefCell<Option<CompositorRuntime>> = const { RefCell::new(None) };
 }
 
+pub(crate) fn reset_compositor_runtime() {
+    COMPOSITOR_RUNTIME.with(|runtime| {
+        runtime.replace(None);
+    });
+}
+
 #[wasm_bindgen(js_name = initCompositor)]
 pub fn init_compositor(width: u32, height: u32) -> Result<(), JsValue> {
     with_gpu_runtime(|gpu_runtime| {
