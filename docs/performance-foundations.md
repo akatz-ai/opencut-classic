@@ -108,6 +108,11 @@ uses the browser path so its keyframe interpolation remains exact. WebM,
 non-local deployments, and browsers without the save-file API also retain the
 browser fallback.
 
+The final mix uses FFmpeg's look-ahead limiter with latency compensation
+enabled. Without that option, the limiter delayed the complete timeline audio
+by its five-millisecond attack window even though every clip trim was otherwise
+correctly aligned.
+
 The native API is intentionally loopback-only and rejects cross-origin calls.
 Because Classic stores originals in browser OPFS, audio sources must currently
 stream once into the native session; a future native shell can replace that

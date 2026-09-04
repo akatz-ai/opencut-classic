@@ -537,7 +537,7 @@ fn build_audio_filter(spec: &ExportSpec) -> Result<(Vec<PathBuf>, String)> {
         ));
     } else {
         filters.push(format!(
-            "{}amix=inputs={}:duration=longest:normalize=0,alimiter=limit=0.98:attack=5:release=50,atrim=duration={}[aout]",
+            "{}amix=inputs={}:duration=longest:normalize=0,alimiter=limit=0.98:attack=5:release=50:latency=1,atrim=duration={}[aout]",
             labels.join(""),
             labels.len(),
             ff(spec.duration_seconds)
@@ -681,6 +681,7 @@ mod tests {
         assert!(filter.contains("atempo=2"));
         assert!(filter.contains("adelay=5000:all=1"));
         assert!(filter.contains("amix=inputs=2"));
+        assert!(filter.contains("alimiter=limit=0.98:attack=5:release=50:latency=1"));
         assert!(filter.ends_with("atrim=duration=10[aout]"));
     }
 
