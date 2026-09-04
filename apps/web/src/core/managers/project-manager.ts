@@ -242,6 +242,12 @@ export class ProjectManager {
 		options: ExportOptions;
 		destination?: ExportDestination;
 	}): Promise<ExportResult> {
+		if (this.exportState.isExporting) {
+			return {
+				success: false,
+				error: "An export is already in progress",
+			};
+		}
 		this.exportCancelRequested = false;
 		const startedAt = Date.now();
 		const project = this.getActive();
@@ -277,11 +283,13 @@ export class ProjectManager {
 			onCancel: () => this.exportCancelRequested,
 		});
 
-		this.exportState = {
-			isExporting: false,
-			progress: this.exportState.progress,
-			result,
-		};
+		this.exportState = result.cancelled
+			? { isExporting: false, progress: 0, result: null }
+			: {
+					isExporting: false,
+					progress: this.exportState.progress,
+					result,
+				};
 		this.notify();
 
 		return result;
@@ -292,6 +300,7 @@ export class ProjectManager {
 	}
 
 	clearExportState(): void {
+		if (this.exportState.isExporting) return;
 		this.exportState = { isExporting: false, progress: 0, result: null };
 		this.notify();
 	}

@@ -28,7 +28,14 @@ import {
 	downloadBuffer,
 	selectExportDestination,
 } from "@/export";
-import { Check, Copy, Download, RotateCcw } from "lucide-react";
+import {
+	Check,
+	CircleAlert,
+	Copy,
+	Download,
+	Loader2,
+	RotateCcw,
+} from "lucide-react";
 import {
 	EXPORT_FORMAT_VALUES,
 	type ExportBitrateMode,
@@ -73,26 +80,30 @@ function isExportEncoder(value: string): value is ExportEncoder {
 
 export function ExportButton() {
 	const [isExportPopoverOpen, setIsExportPopoverOpen] = useState(false);
-	const editor = useEditor();
 	const activeProject = useEditor((e) => e.project.getActiveOrNull());
+	const exportState = useEditor((e) => e.project.getExportState());
 	const hasProject = !!activeProject;
-
-	const handlePopoverOpenChange = ({ open }: { open: boolean }) => {
-		if (!open) {
-			editor.project.cancelExport();
-			editor.project.clearExportState();
-		}
-		setIsExportPopoverOpen(open);
-	};
+	const exportPercent = Math.round(exportState.progress * 100);
+	const hasExportError = Boolean(
+		exportState.result && !exportState.result.success,
+	);
+	const buttonLabel = exportState.isExporting
+		? `Exporting ${exportPercent}%`
+		: hasExportError
+			? "Export failed"
+			: "Export";
 
 	return (
-		<Popover
-			open={isExportPopoverOpen}
-			onOpenChange={(open) => handlePopoverOpenChange({ open })}
-		>
+		<Popover open={isExportPopoverOpen} onOpenChange={setIsExportPopoverOpen}>
 			<PopoverTrigger asChild>
 				<button
 					type="button"
+					aria-label={buttonLabel}
+					title={
+						exportState.isExporting
+							? "An export is running. Click to view progress."
+							: undefined
+					}
 					className={cn(
 						"flex items-center gap-1.5 rounded-md bg-[#38BDF8] px-[0.12rem] py-[0.12rem] text-white",
 						hasProject ? "cursor-pointer" : "cursor-not-allowed opacity-50",
@@ -107,8 +118,19 @@ export function ExportButton() {
 					}}
 				>
 					<div className="relative flex items-center gap-1.5 rounded-[0.6rem] bg-linear-270 from-[#2567EC] to-[#37B6F7] px-4 py-1 shadow-[0_1px_3px_0px_rgba(0,0,0,0.65)]">
-						<HugeiconsIcon icon={TransitionTopIcon} className="z-50 size-3.5" />
-						<span className="z-50 text-[0.875rem]">Export</span>
+						{exportState.isExporting ? (
+							<Loader2 className="z-50 size-3.5 animate-spin" />
+						) : hasExportError ? (
+							<CircleAlert className="z-50 size-3.5" />
+						) : (
+							<HugeiconsIcon
+								icon={TransitionTopIcon}
+								className="z-50 size-3.5"
+							/>
+						)}
+						<span className="z-50 text-[0.875rem]" aria-live="polite">
+							{buttonLabel}
+						</span>
 						<div className="absolute top-0 left-0 z-10 flex size-full items-center justify-center rounded-[0.6rem] bg-linear-to-t from-white/0 to-white/50">
 							<div className="absolute top-[0.08rem] z-50 h-[calc(100%-2px)] w-[calc(100%-2px)] rounded-[0.6rem] bg-linear-270 from-[#2567EC] to-[#37B6F7]"></div>
 						</div>
@@ -228,6 +250,7 @@ function ExportPopover({
 
 		if (result.cancelled) {
 			editor.project.clearExportState();
+			toast.info("Export cancelled");
 			return;
 		}
 
@@ -242,7 +265,11 @@ function ExportPopover({
 		if (result.success) {
 			editor.project.clearExportState();
 			onOpenChange(false);
+			toast.success(`Export complete: ${filename}`);
+			return;
 		}
+
+		toast.error(result.error ?? "Export failed");
 	};
 
 	const handleCancel = () => {
@@ -536,6 +563,11 @@ function ExportPopover({
 												: "Estimating remaining time…"}
 										</span>
 									</div>
+									<p className="text-muted-foreground text-xs">
+										You can dismiss this panel and keep editing. Progress
+										remains on the Export button; preview rendering resumes when
+										the export finishes.
+									</p>
 								</div>
 
 								<Button
@@ -543,7 +575,7 @@ function ExportPopover({
 									className="w-full rounded-md"
 									onClick={handleCancel}
 								>
-									Cancel
+									Cancel export
 								</Button>
 							</div>
 						)}

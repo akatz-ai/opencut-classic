@@ -131,24 +131,29 @@ export function EditorProvider({ projectId, children }: EditorProviderProps) {
 
 function EditorRuntimeBindings() {
 	const editor = useEditor();
+	const isExporting = useEditor(
+		(instance) => instance.project.getExportState().isExporting,
+	);
 	const rippleEditingEnabled = useTimelineStore(
 		(state) => state.rippleEditingEnabled,
 	);
 
 	useEffect(() => {
+		// EditorCore managers intentionally expose mutable runtime settings.
+		// eslint-disable-next-line react-hooks/immutability
 		editor.command.isRippleEnabled = rippleEditingEnabled;
 	}, [editor, rippleEditingEnabled]);
 
 	useEffect(() => {
 		const handleBeforeUnload = (event: BeforeUnloadEvent) => {
-			if (!editor.save.getIsDirty()) return;
+			if (!editor.save.getIsDirty() && !isExporting) return;
 			event.preventDefault();
-			(event as unknown as { returnValue: string }).returnValue = "";
+			event.returnValue = "";
 		};
 
 		window.addEventListener("beforeunload", handleBeforeUnload);
 		return () => window.removeEventListener("beforeunload", handleBeforeUnload);
-	}, [editor]);
+	}, [editor, isExporting]);
 
 	useEditorActions();
 	useKeybindingsListener();
