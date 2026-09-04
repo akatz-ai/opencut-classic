@@ -66,7 +66,7 @@ import {
 	getPropertyLabel,
 	type ExpandedRow,
 } from "./expanded-layout";
-import { TIMELINE_HORIZONTAL_WHEEL_STEP_PX } from "./interaction";
+import { getTimelineHorizontalWheelDelta } from "./interaction";
 import { TimelineToolbar } from "./timeline-toolbar";
 import { useElementSelection } from "@/timeline/hooks/element/use-element-selection";
 import { useTimelineSeek } from "@/timeline/hooks/use-timeline-seek";
@@ -263,18 +263,18 @@ export function Timeline() {
 			const tracks = tracksScrollRef.current;
 			if (!tracks) return;
 
-			const isHorizontal =
-				e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY);
+			const horizontalDelta = getTimelineHorizontalWheelDelta({
+				altKey: e.altKey,
+				shiftKey: e.shiftKey,
+				deltaX: e.deltaX,
+				deltaY: e.deltaY,
+				deltaMode: e.deltaMode,
+			});
 
 			e.preventDefault();
 
-			if (isHorizontal) {
-				const raw =
-					Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
-				const clamped =
-					Math.sign(raw) *
-					Math.min(Math.abs(raw), TIMELINE_HORIZONTAL_WHEEL_STEP_PX);
-				tracks.scrollLeft = Math.max(0, tracks.scrollLeft + clamped);
+			if (horizontalDelta !== null) {
+				tracks.scrollLeft = Math.max(0, tracks.scrollLeft + horizontalDelta);
 			} else {
 				tracks.scrollTop = Math.max(0, tracks.scrollTop + e.deltaY);
 			}
