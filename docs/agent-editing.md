@@ -16,8 +16,9 @@ undo behavior.
   adjustment, and global ripple logic.
 
 The current tools can inspect projects, stage original or proxy media for local
-analysis, return visual contact sheets, apply a reviewed cut plan as one
-undoable command, and render a revision-checked MP4 artifact.
+analysis, return visual contact sheets, create reusable time-aligned
+transcripts, apply a reviewed cut plan as one undoable command, and render a
+revision-checked MP4 artifact.
 
 ## CLI
 
@@ -25,6 +26,7 @@ undoable command, and render a revision-checked MP4 artifact.
 bun apps/agent/src/cli.ts projects
 bun apps/agent/src/cli.ts inspect --project <project-id>
 bun apps/agent/src/cli.ts stage-media --project <project-id> --media <media-id>
+bun apps/agent/src/cli.ts transcribe-media --project <project-id>
 ```
 
 Export the exact inspected revision with explicit output parameters:
@@ -45,14 +47,57 @@ size. `--encoder native_nvenc` selects the experimental raw BGRA-to-NVENC path;
 WebCodecs is the measured-fast default. Add `--no-audio` only when a silent
 artifact is intentional.
 
-Generate a verbatim transcript to identify candidate words. Raw Whisper word
-timestamps are search hints only; they must never be used directly as edit
-boundaries.
+## Transcription for script review
+
+`transcribe-media` defaults to the local HyperFrames 0.8.27 `whisper.cpp`
+runner with `small.en`. The package is pinned in the agent workspace and model
+files use HyperFrames' persistent cache, so later calls do not need to locate or
+configure a model. If `--media` is omitted, the command selects the audible
+asset with the greatest coverage on the current timeline.
 
 ```sh
-bunx hyperframes@0.8.27 transcribe <audio-or-video> \
-  --engine whisper --model small.en --language en --json
+bun apps/agent/src/cli.ts transcribe-media \
+  --project <project-id> \
+  --backend local \
+  --model small.en \
+  --language en \
+  --detail segments
 ```
+
+The durable artifact contains the complete source-media word array. Every tool
+call also remaps those words through the current timeline clips, trims, cuts,
+and retimes, so a cached source transcript still produces a current edited
+script. Default `segments` output returns compact timestamped passages;
+`--detail text` returns only the edited script and `--detail words` returns both
+complete word arrays. `--force` refreshes the cached source transcript.
+
+Artifacts are stored owner-only under
+`~/.local/share/opencut-agent/projects/<project-id>/transcripts/`. On the Splat
+Smith walkthrough, the first 700-second local run took about two minutes and
+produced 1,916 source words; a cached call returned in 34 ms and mapped 1,877
+currently visible words through 24 timeline clips.
+
+An explicit remote option reuses Hyprwhspr's configured `rest-api` provider:
+
+```sh
+bun apps/agent/src/cli.ts transcribe-media \
+  --project <project-id> \
+  --backend hyprwhspr \
+  --language en
+```
+
+The remote path reads the provider key only from Hyprwhspr's owner-only
+credential store, converts speech to 16 kHz mono FLAC, chunks long media using
+Hyprwhspr's configured limit, and requests word and segment timestamps. It does
+not put credentials in arguments, logs, Git, or transcript artifacts. This
+option uploads audio to the configured provider and may incur provider charges,
+so MCP instructions keep the local backend as the default unless remote
+transcription is explicitly requested.
+
+Raw ASR timestamps are suitable for script review and navigation, but remain
+search hints rather than destructive edit boundaries.
+
+## Accurate speech-cut alignment
 
 The accurate speech-cut path uses WhisperX's CTC aligner with the Apache-2.0
 `facebook/wav2vec2-base-960h` model. A CPU-only analysis environment can be
@@ -142,13 +187,16 @@ The adapter exposes:
 - `inspect_project`
 - `stage_media`
 - `media_contact_sheet`
+- `transcribe_media`
 - `apply_cut_plan`
 - `export_project`
 
 `apply_cut_plan` requires an exact revision and is marked as a destructive,
 non-idempotent MCP tool. `export_project` also requires an exact revision but
-does not mutate the project. The server instructions require inspection and a
-reviewed plan before timeline edits.
+does not mutate the project. `transcribe_media` creates a local cache but does
+not mutate OpenCut; its `hyprwhspr` backend is the only mode that sends audio to
+a remote service. The server instructions require inspection and a reviewed
+plan before timeline edits.
 
 ## Current limits
 
@@ -162,3 +210,7 @@ reviewed plan before timeline edits.
 - Speech edits are hard cuts. Short audio crossfades remain future work.
 - Forced alignment currently runs as optional local analysis tooling rather
   than as a bundled desktop dependency.
+- Automatic selection transcribes the single audible asset with the greatest
+  timeline coverage. Projects with several independent speakers or overlapping
+  audible assets should call the tool once per media ID; merged speaker-aware
+  transcription is future work.

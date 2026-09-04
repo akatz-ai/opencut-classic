@@ -6,12 +6,16 @@ import { inspectProject, listProjects, runCommand } from "./client";
 import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+	presentTranscriptionResult,
+	transcribeProjectMedia,
+} from "./transcription";
 
 const server = new McpServer(
-	{ name: "opencut", version: "0.1.0" },
+	{ name: "opencut", version: "0.2.0" },
 	{
 		instructions:
-			"Inspect the active OpenCut project before editing. Mutations require the exact current revision. Stage media only when analysis needs source bytes. Apply cut plans only after presenting their ranges and total removed duration to the user.",
+			"Inspect the active OpenCut project before editing. Mutations require the exact current revision. For script review, use transcribe_media with its default local backend; select hyprwhspr only when the user explicitly wants remote transcription because it uploads audio to the configured provider. Apply cut plans only after presenting their ranges and total removed duration to the user.",
 	},
 );
 
@@ -95,6 +99,42 @@ server.registerTool(
 			structuredContent: { sheetPath, timesSeconds: times_seconds },
 		};
 	},
+);
+
+server.registerTool(
+	"transcribe_media",
+	{
+		description:
+			"Transcribe an OpenCut media asset and return source-time words plus a view mapped through the current timeline cuts. The default local HyperFrames/whisper.cpp backend is cached and private. The optional hyprwhspr backend uploads speech audio to Hyprwhspr's configured remote provider.",
+		inputSchema: {
+			project_id: z.string(),
+			media_id: z.string().optional(),
+			backend: z.enum(["local", "hyprwhspr"]).default("local"),
+			model: z.string().optional(),
+			language: z.string().default("en"),
+			detail: z.enum(["text", "segments", "words"]).default("segments"),
+			force: z.boolean().default(false),
+		},
+		annotations: {
+			readOnlyHint: false,
+			destructiveHint: false,
+			idempotentHint: false,
+		},
+	},
+	async ({ project_id, media_id, backend, model, language, detail, force }) =>
+		toolResult(
+			presentTranscriptionResult({
+				result: await transcribeProjectMedia({
+					projectId: project_id,
+					mediaId: media_id,
+					backend,
+					model,
+					language,
+					force,
+				}),
+				detail,
+			}),
+		),
 );
 
 server.registerTool(

@@ -12,6 +12,10 @@ import {
 	readAlignmentPass,
 	readPcm16Wav,
 } from "./forced-alignment";
+import {
+	presentTranscriptionResult,
+	transcribeProjectMedia,
+} from "./transcription";
 
 const [command, ...args] = process.argv.slice(2);
 
@@ -31,6 +35,31 @@ try {
 				payload: { mediaId: requiredOption(args, "--media") },
 			});
 			break;
+		case "transcribe-media": {
+			const transcript = await transcribeProjectMedia({
+				projectId: requiredOption(args, "--project"),
+				mediaId: optionalOption(args, "--media"),
+				backend: choiceOption(
+					args,
+					"--backend",
+					["local", "hyprwhspr"],
+					"local",
+				),
+				model: optionalOption(args, "--model"),
+				language: optionalOption(args, "--language") ?? "en",
+				force: args.includes("--force"),
+			});
+			result = presentTranscriptionResult({
+				result: transcript,
+				detail: choiceOption(
+					args,
+					"--detail",
+					["text", "segments", "words"],
+					"segments",
+				),
+			});
+			break;
+		}
 		case "apply-cuts": {
 			const projectId = requiredOption(args, "--project");
 			const planPath = requiredOption(args, "--plan");
@@ -174,7 +203,7 @@ try {
 		}
 		default:
 			throw new Error(
-				"Usage: opencut-agent <projects|inspect|stage-media|plan-speech-cuts|apply-cuts|export-project> [options]",
+				"Usage: opencut-agent <projects|inspect|stage-media|transcribe-media|plan-speech-cuts|apply-cuts|export-project> [options]",
 			);
 	}
 	console.log(JSON.stringify(result, null, 2));

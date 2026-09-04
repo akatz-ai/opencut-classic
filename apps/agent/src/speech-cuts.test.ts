@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { buildSpeechCutPlan } from "./speech-cuts";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { buildSpeechCutPlan, readTranscriptWords } from "./speech-cuts";
 
 describe("buildSpeechCutPlan", () => {
 	test("maps source silence and filler words through edited timeline clips", () => {
@@ -44,5 +47,23 @@ describe("buildSpeechCutPlan", () => {
 			}),
 		]);
 		expect(plan.totalRemovedSeconds).toBe(7.2);
+	});
+
+	test("reads the durable transcription artifact word field", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "opencut-transcript-test-"));
+		const path = join(directory, "transcript.json");
+		try {
+			await writeFile(
+				path,
+				JSON.stringify({
+					words: [{ text: "hello", start: 0.1, end: 0.5 }],
+				}),
+			);
+			expect(await readTranscriptWords(path)).toEqual([
+				{ text: "hello", start: 0.1, end: 0.5 },
+			]);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
 	});
 });

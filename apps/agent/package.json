@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",
+    "hyperframes": "0.8.27",
     "zod": "4.3.6"
   },
   "devDependencies": {

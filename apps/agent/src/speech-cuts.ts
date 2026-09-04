@@ -58,14 +58,14 @@ export async function readTranscriptWords(
 	path: string,
 ): Promise<TranscriptWord[]> {
 	const value: unknown = JSON.parse(await readFile(path, "utf8"));
-	const candidates = Array.isArray(value)
-		? value
-		: typeof value === "object" &&
-			  value !== null &&
-			  "transcription" in value &&
-			  Array.isArray(value.transcription)
-			? value.transcription
-			: null;
+	let candidates: unknown[] | null = Array.isArray(value) ? value : null;
+	if (typeof value === "object" && value !== null) {
+		if ("words" in value && Array.isArray(value.words)) {
+			candidates = value.words;
+		} else if ("transcription" in value && Array.isArray(value.transcription)) {
+			candidates = value.transcription;
+		}
+	}
 	if (!candidates) throw new Error("Transcript must contain a word array");
 	return candidates.flatMap((word): TranscriptWord[] => {
 		if (
