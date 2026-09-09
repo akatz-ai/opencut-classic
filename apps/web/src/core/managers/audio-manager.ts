@@ -9,17 +9,16 @@ import {
 } from "@/timeline/audio-state";
 import { createAudioMasteringChain } from "@/media/audio-mastering";
 import {
+	playbackAudioBuffers,
+	schedulePlaybackAudioBuffer,
+	type PlaybackAudioBuffer,
+} from "@/media/audio-playback-buffers";
+import {
 	getClipTimeAtSourceTime,
 	getSourceTimeAtClipTime,
 	renderRetimedBuffer,
 } from "@/retime";
-import {
-	ALL_FORMATS,
-	AudioBufferSink,
-	BlobSource,
-	Input,
-	type WrappedAudioBuffer,
-} from "mediabunny";
+import { ALL_FORMATS, AudioBufferSink, BlobSource, Input } from "mediabunny";
 
 export class AudioManager {
 	private audioContext: AudioContext | null = null;
@@ -35,7 +34,7 @@ export class AudioManager {
 	private activeClipIds = new Set<string>();
 	private clipIterators = new Map<
 		string,
-		AsyncGenerator<WrappedAudioBuffer, void, unknown>
+		AsyncGenerator<PlaybackAudioBuffer, void, unknown>
 	>();
 	private queuedSources = new Set<AudioBufferSourceNode>();
 	private preparedClipBuffers = new Map<string, Promise<AudioBuffer | null>>();
@@ -265,11 +264,20 @@ export class AudioManager {
 				retime: clip.retime,
 			});
 
-		const iterator = sink.buffers(sourceStartTime);
+		const iterator = playbackAudioBuffers({
+			chunks: sink.buffers(sourceStartTime),
+			context: audioContext,
+		});
 		this.clipIterators.set(clip.id, iterator);
 		let consecutiveDroppedBufferCount = 0;
 
-		for await (const { buffer, timestamp } of iterator) {
+		for await (const {
+			buffer,
+			timestamp,
+			duration,
+			offsetSeconds,
+			sampleRateRatio,
+		} of iterator) {
 			if (!this.editor.playback.getIsPlaying()) return;
 			if (sessionId !== this.playbackSessionId) return;
 
@@ -283,9 +291,12 @@ export class AudioManager {
 
 			const node = audioContext.createBufferSource();
 			node.buffer = buffer;
-			if (clip.retime) {
-				node.playbackRate.value = clampRetimeRate({ rate: clip.retime.rate });
-			}
+			const rate = clampRetimeRate({ rate: clip.retime?.rate ?? 1 });
+			node.playbackRate.value = rate * sampleRateRatio;
+			const sourceDuration = Math.min(
+				duration,
+				(clipEnd - timelineTime) * rate,
+			);
 			const clipGain = audioContext.createGain();
 			clipGain.gain.value = clip.volume;
 			node.connect(clipGain);
@@ -296,38 +307,43 @@ export class AudioManager {
 				this.playbackLatencyCompensationSeconds +
 				(timelineTime - this.playbackStartTime);
 
-			if (startTimestamp >= audioContext.currentTime) {
-				node.start(startTimestamp);
+			if (
+				schedulePlaybackAudioBuffer({
+					context: audioContext,
+					node,
+					startTime: startTimestamp,
+					duration: sourceDuration * sampleRateRatio,
+					offsetSeconds,
+					rate: rate * sampleRateRatio,
+				})
+			) {
 				consecutiveDroppedBufferCount = 0;
 			} else {
+				node.disconnect();
+				clipGain.disconnect();
 				const offset = audioContext.currentTime - startTimestamp;
-				if (offset < buffer.duration) {
-					node.start(audioContext.currentTime, offset);
-					consecutiveDroppedBufferCount = 0;
-				} else {
-					consecutiveDroppedBufferCount += 1;
-					if (consecutiveDroppedBufferCount >= 5) {
-						const nextCompensationSeconds = Math.max(
-							this.playbackLatencyCompensationSeconds,
-							Math.min(0.25, offset + 0.01),
-						);
-						if (
-							nextCompensationSeconds >
-							this.playbackLatencyCompensationSeconds + 0.001
-						) {
-							this.playbackLatencyCompensationSeconds = nextCompensationSeconds;
-						}
-						const resyncStartTime = this.getPlaybackTime();
-						this.clipIterators.delete(clip.id);
-						void this.runClipIterator({
-							clip,
-							startTime: resyncStartTime,
-							sessionId,
-						});
-						return;
+				consecutiveDroppedBufferCount += 1;
+				if (consecutiveDroppedBufferCount >= 5) {
+					const nextCompensationSeconds = Math.max(
+						this.playbackLatencyCompensationSeconds,
+						Math.min(0.25, offset + 0.01),
+					);
+					if (
+						nextCompensationSeconds >
+						this.playbackLatencyCompensationSeconds + 0.001
+					) {
+						this.playbackLatencyCompensationSeconds = nextCompensationSeconds;
 					}
-					continue;
+					const resyncStartTime = this.getPlaybackTime();
+					this.clipIterators.delete(clip.id);
+					void this.runClipIterator({
+						clip,
+						startTime: resyncStartTime,
+						sessionId,
+					});
+					return;
 				}
+				continue;
 			}
 
 			this.queuedSources.add(node);

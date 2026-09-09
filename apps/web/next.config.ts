@@ -5,6 +5,7 @@ import { withContentCollections } from "@content-collections/next";
 const useLocalWasm = process.env.OPENCUT_LOCAL_WASM === "1";
 
 const nextConfig: NextConfig = {
+	distDir: process.env.OPENCUT_NEXT_DIST_DIR || ".next",
 	compiler: {
 		removeConsole: process.env.NODE_ENV === "production",
 	},

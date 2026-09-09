@@ -52,7 +52,10 @@ export default function RootLayout({
 							strategy="afterInteractive"
 							async
 							data-client-id="UP-Wcoy5arxFeK7oyjMMZ"
-							data-disabled={webEnv.NODE_ENV === "development"}
+							data-disabled={
+								webEnv.NODE_ENV === "development" ||
+								process.env.NEXT_PUBLIC_OPENCUT_LOCAL_FILES === "1"
+							}
 							data-track-attributes={false}
 							data-track-errors={true}
 							data-track-outgoing-links={false}
