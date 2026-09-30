@@ -155,8 +155,38 @@ impl MediaEngine {
             available: true,
             ffmpeg_version,
             ffprobe_version,
-            h264_nvenc: encoder_text.contains("h264_nvenc"),
+            // FFmpeg can advertise NVENC on machines without NVIDIA hardware.
+            // Only expose the export option when a small encode actually works.
+            h264_nvenc: encoder_text.contains("h264_nvenc") && self.nvenc_usable(),
         })
+    }
+
+    fn nvenc_usable(&self) -> bool {
+        Command::new(&self.ffmpeg)
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=size=256x256:rate=1",
+                "-frames:v",
+                "1",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:v",
+                "h264_nvenc",
+                "-f",
+                "null",
+                "-",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
     }
 
     pub fn generate_proxy(&self, options: &ProxyOptions) -> Result<ProxyResult> {
@@ -393,9 +423,13 @@ impl MediaEngine {
                 "12M",
             ]);
         } else {
-            command.args([
-                "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-b:v", "0",
-            ]);
+            let encoders = Command::new(&self.ffmpeg)
+                .args(["-hide_banner", "-encoders"])
+                .output()
+                .context("failed to inspect FFmpeg software encoders")?;
+            command.args(software_proxy_args(&String::from_utf8_lossy(
+                &encoders.stdout,
+            ))?);
         }
 
         command
@@ -420,6 +454,19 @@ impl MediaEngine {
             .with_context(|| format!("failed to run {}", self.ffprobe.display()))?;
         ensure_success(&output, "FFprobe")?;
         serde_json::from_slice(&output.stdout).context("failed to parse FFprobe JSON")
+    }
+}
+
+fn software_proxy_args(encoders: &str) -> Result<Vec<&'static str>> {
+    if encoders.contains("libx264") {
+        Ok(vec![
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-b:v", "0",
+        ])
+    } else if encoders.contains("libopenh264") {
+        // Fedora's native ARM64 package supplies OpenH264 instead of x264.
+        Ok(vec!["-c:v", "libopenh264", "-b:v", "3M"])
+    } else {
+        bail!("FFmpeg needs libx264 or libopenh264 for software H.264 proxies")
     }
 }
 
@@ -683,6 +730,36 @@ fn ff(value: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fedora_proxy_fallback_does_not_pass_x264_options_to_openh264() {
+        let args = software_proxy_args(" V....D libopenh264 H.264 encoder").unwrap();
+        assert!(args.windows(2).any(|pair| pair == ["-c:v", "libopenh264"]));
+        assert!(!args.contains(&"-crf"));
+        assert!(!args.contains(&"-preset"));
+        assert_eq!(
+            software_proxy_args("libopenh264 libx264").unwrap()[1],
+            "libx264"
+        );
+        assert!(software_proxy_args("h264_nvenc").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn listed_nvenc_is_not_available_when_encoding_fails() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = env::temp_dir().join(format!("opencut-nvenc-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&dir).unwrap();
+        let ffmpeg = dir.join("ffmpeg");
+        fs::write(&ffmpeg, "#!/bin/sh\ncase \"$*\" in\n *-version*) echo 'ffmpeg test';;\n *-encoders*) echo ' V....D h264_nvenc';;\n *) exit 1;;\nesac\n").unwrap();
+        fs::set_permissions(&ffmpeg, fs::Permissions::from_mode(0o700)).unwrap();
+        let engine = MediaEngine {
+            ffmpeg: ffmpeg.clone(),
+            ffprobe: ffmpeg,
+        };
+        assert!(!engine.health().unwrap().h264_nvenc);
+        fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn atempo_rates_stay_in_ffmpeg_range() {

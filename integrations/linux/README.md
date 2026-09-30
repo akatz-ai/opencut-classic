@@ -2,6 +2,42 @@
 
 Installed on akatz-arch on 2026-09-08. This is local Linux/browser integration, not a new rendering or editing backend.
 
+## Fedora Asahi ARM64 installation, 2026-09-30
+
+The MacBook uses the same `codex/classic-performance-foundations` source branch
+as Arch, including the saved brand-motion, audio-fade and agent-editing changes.
+Build the media engine natively with `cargo build --release -p opencut-media-engine`.
+The `rust/wasm/pkg` browser package is architecture independent; it can be built
+on Arch and copied from the same source revision before `bun install --frozen-lockfile`.
+Do not copy Arch's native binaries, browser profile, `.env.local` or credentials.
+
+Fedora's `ffmpeg-free` provides OpenH264 instead of x264. Its default
+`noopenh264` library advertises the codec but cannot encode or decode. The MacBook
+uses Fedora's signed `openh264-2.6.0-3.fc44.aarch64.rpm`, extracted privately into
+`~/.local/opt/opencut-codecs`, and sets
+`LD_LIBRARY_PATH=$HOME/.local/opt/opencut-codecs/usr/lib64` for this app only.
+The service and browser launcher both inherit that path. System Mesa, Asahi
+drivers and system codec packages are unchanged. Software proxies prefer x264
+when present and otherwise use OpenH264. The health endpoint exposes NVENC only
+when a real one-frame encoding probe succeeds, rather than trusting the encoder
+list on a machine with no NVIDIA device.
+
+The production build uses `.next-macbook-5567c771`. The user service starts
+Next's generated `standalone/apps/web/server.js` on `127.0.0.1:3003` after
+copying `public` and the build's static assets into its standalone directory.
+`EnvironmentFile` explicitly loads this machine's private `.env.local`; merely
+building with that file does not supply its variables to the standalone server.
+`OPENCUT_MEDIA_ENGINE_BIN` points to the native release binary. The desktop
+launcher starts the service on demand and opens a dedicated local Chrome app
+profile, without changing the ordinary browser or MIME defaults.
+
+Acceptance checks use an isolated browser profile: project creation, H.264/AAC
+MP4 import, timeline insertion, graphics preview with the WebGL fallback, and
+short 1920×1080 exports in MP4 and WebM. Eight media-crate tests cover software
+codec selection and rejecting nonfunctional NVENC, alongside the existing
+tests. CPU proxy generation and native H.264/AAC finalization also passed.
+This is a short functional check, not a long-project performance benchmark.
+
 ## User contract
 
 - Right-click a video → **Open With → OpenCut** (first alternative).
