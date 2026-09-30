@@ -8,6 +8,7 @@ import {
 	uploadTexture,
 } from "opencut-wasm";
 import * as opencutWasm from "opencut-wasm";
+import { sameExternalPixels } from "./texture-cache";
 import {
 	incrementCounter,
 	isRenderPerfEnabled,
@@ -36,6 +37,7 @@ type RenderedCacheEntry = {
 type ExternalCacheEntry = {
 	kind: "external";
 	source: CanvasImageSource;
+	version?: string | number;
 	stagingCanvas: OffscreenCanvas | null;
 	width: number;
 	height: number;
@@ -127,9 +129,7 @@ class WasmCompositor {
 		const previous = this.cache.get(texture.id);
 		if (
 			previous?.kind === "external" &&
-			previous.source === texture.source &&
-			previous.width === texture.width &&
-			previous.height === texture.height
+			sameExternalPixels({ previous, next: texture })
 		) {
 			incrementCounter({ name: "textureCacheHit" });
 			return;
@@ -157,6 +157,7 @@ class WasmCompositor {
 		this.cache.set(texture.id, {
 			kind: "external",
 			source: texture.source,
+			version: texture.version,
 			stagingCanvas,
 			width: texture.width,
 			height: texture.height,

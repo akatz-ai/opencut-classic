@@ -1,4 +1,5 @@
 import { clampAnimationsToDuration } from "@/animation";
+import { fitClipMotion } from "@/motion";
 import {
 	clampRetimeRate,
 	getSourceSpanAtClipTime,
@@ -7,6 +8,7 @@ import {
 import type { RetimeConfig, SceneTracks, TimelineElement } from "@/timeline";
 import { isRetimableElement } from "@/timeline";
 import { ZERO_MEDIA_TIME, roundMediaTime } from "@/wasm";
+import { clampAudioFadesToDuration } from "./audio-fades";
 
 type ElementUpdateField = keyof TimelineElement | string;
 
@@ -84,15 +86,25 @@ const deriveRules: ElementUpdateRule[] = [
 const enforceRules: ElementUpdateRule[] = [
 	{
 		triggers: ["duration"],
-		apply: ({ element }) => ({
-			element: {
+		apply: ({ element }) => {
+			const durationAdjusted = {
 				...element,
+				motion: fitClipMotion({
+					motion: element.motion,
+					duration: element.duration,
+				}),
 				animations: clampAnimationsToDuration({
 					animations: element.animations,
 					duration: element.duration,
 				}),
-			},
-		}),
+			} as TimelineElement;
+			return {
+				element:
+					durationAdjusted.type === "audio"
+						? clampAudioFadesToDuration({ element: durationAdjusted })
+						: durationAdjusted,
+			};
+		},
 	},
 	{
 		triggers: ["startTime"],
@@ -149,9 +161,7 @@ export function applyElementUpdate({
 			...(patch.params ?? {}),
 		},
 	} as TimelineElement;
-	const changedFields = new Set(
-		Object.keys(patch) as ElementUpdateField[],
-	);
+	const changedFields = new Set(Object.keys(patch) as ElementUpdateField[]);
 
 	for (const rule of deriveRules) {
 		if (!shouldApplyRule({ rule, changedFields })) {

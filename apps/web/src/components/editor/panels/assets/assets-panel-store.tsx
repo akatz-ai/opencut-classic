@@ -22,6 +22,7 @@ export const TAB_KEYS = [
 	"stickers",
 	"effects",
 	"transitions",
+	"brand",
 	"captions",
 	"adjustment",
 	"settings",
@@ -36,6 +37,10 @@ const createHugeiconsIcon =
 	);
 
 export const tabs = {
+	brand: {
+		icon: createHugeiconsIcon({ icon: ColorsIcon }),
+		label: "Brand Kit",
+	},
 	media: {
 		icon: createHugeiconsIcon({ icon: Folder03Icon }),
 		label: "Media",

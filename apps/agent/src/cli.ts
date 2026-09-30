@@ -1,6 +1,12 @@
 #!/usr/bin/env bun
 import { readFile, writeFile } from "node:fs/promises";
-import { inspectProject, listProjects, runCommand } from "./client";
+import {
+	commandStatus,
+	inspectProject,
+	inspectView,
+	listProjects,
+	runCommand,
+} from "./client";
 import {
 	buildSpeechCutPlan,
 	detectSilences,
@@ -26,11 +32,63 @@ try {
 			result = await listProjects();
 			break;
 		case "inspect":
-			result = await inspectProject(requiredOption(args, "--project"));
+			result = await inspectView(
+				requiredOption(args, "--project"),
+				Object.fromEntries([
+					["detail", optionalOption(args, "--detail") ?? "overview"],
+					...["sessionId", "clipId", "offset", "limit", "start", "end"].flatMap(
+						(key) => {
+							const value = optionalOption(
+								args,
+								key === "sessionId"
+									? "--session"
+									: key === "clipId"
+										? "--clip"
+										: `--${key}`,
+							);
+							return value ? [[key, value]] : [];
+						},
+					),
+				]),
+			);
 			break;
+		case "command-status":
+			result = await commandStatus(
+				requiredOption(args, "--project"),
+				requiredOption(args, "--command"),
+			);
+			break;
+		case "catalog":
+			result = await runCommand({
+				projectId: requiredOption(args, "--project"),
+				sessionId: optionalOption(args, "--session"),
+				kind: "catalog",
+				payload: { definition: optionalOption(args, "--definition") },
+			});
+			break;
+		case "edit": {
+			const plan = JSON.parse(
+				await readFile(requiredOption(args, "--plan"), "utf8"),
+			);
+			if (!Array.isArray(plan.operations))
+				throw new Error("Plan must contain operations");
+			result = await runCommand({
+				projectId: requiredOption(args, "--project"),
+				sessionId: requiredOption(args, "--session"),
+				expectedRevision: requiredOption(args, "--expected-revision"),
+				idempotencyKey: requiredOption(args, "--key"),
+				kind: "edit_batch",
+				payload: {
+					operations: plan.operations,
+					dryRun: args.includes("--dry-run"),
+				},
+			});
+			break;
+		}
 		case "stage-media":
 			result = await runCommand({
 				projectId: requiredOption(args, "--project"),
+				sessionId: optionalOption(args, "--session"),
 				kind: "stage_media",
 				payload: { mediaId: requiredOption(args, "--media") },
 			});
@@ -38,6 +96,7 @@ try {
 		case "transcribe-media": {
 			const transcript = await transcribeProjectMedia({
 				projectId: requiredOption(args, "--project"),
+				sessionId: optionalOption(args, "--session"),
 				mediaId: optionalOption(args, "--media"),
 				backend: choiceOption(
 					args,
@@ -75,6 +134,7 @@ try {
 			result = await runCommand({
 				projectId,
 				kind: "apply_cut_plan",
+				sessionId: optionalOption(args, "--session"),
 				payload: { ranges: plan.ranges },
 				expectedRevision: requiredOption(args, "--expected-revision"),
 			});
@@ -85,6 +145,7 @@ try {
 			result = await runCommand({
 				projectId,
 				kind: "export_project",
+				sessionId: optionalOption(args, "--session"),
 				expectedRevision: requiredOption(args, "--expected-revision"),
 				payload: {
 					width: numberOption(args, "--width", 1920),
@@ -129,7 +190,10 @@ try {
 					"At least two --alignment-pass files are required; raw ASR timestamps are not edit boundaries",
 				);
 			}
-			const snapshot = await inspectProject(projectId);
+			const snapshot = await inspectProject(
+				projectId,
+				optionalOption(args, "--session"),
+			);
 			if (typeof snapshot !== "object" || snapshot === null) {
 				throw new Error("Project snapshot is unavailable");
 			}
@@ -203,10 +267,17 @@ try {
 		}
 		default:
 			throw new Error(
-				"Usage: opencut-agent <projects|inspect|stage-media|transcribe-media|plan-speech-cuts|apply-cuts|export-project> [options]",
+				"Usage: opencut-agent <projects|inspect|catalog|edit|command-status|stage-media|transcribe-media|plan-speech-cuts|apply-cuts|export-project> [options]. edit requires --project --session --expected-revision --key --plan and optionally --dry-run. inspect defaults to overview; --detail media|timeline|clip|full reveals more.",
 			);
 	}
 	console.log(JSON.stringify(result, null, 2));
+	if (
+		typeof result === "object" &&
+		result &&
+		"success" in result &&
+		result.success === false
+	)
+		process.exitCode = 1;
 } catch (error) {
 	console.error(error instanceof Error ? error.message : String(error));
 	process.exitCode = 1;

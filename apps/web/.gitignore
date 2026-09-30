@@ -7,9 +7,15 @@
 
 .next/
 .next-open-local-*/
+.next-brand-*/
+.next-transitions-*/
+public/local-proofs/
 
 .font-cache/
 
 next-env.d.ts
 
 *.tsbuildinfo
+
+# Isolated local production builds
+.next-*/

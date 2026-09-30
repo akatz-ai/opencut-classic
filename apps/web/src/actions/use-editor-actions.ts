@@ -26,6 +26,7 @@ import {
 	type ScopeEntry,
 } from "@/selection/scope";
 import { useCommittedRef } from "@/hooks/use-committed-ref";
+import { removeSelectedTransition } from "@/motion/transition-selection";
 
 export function useEditorActions() {
 	const editor = useEditor();
@@ -126,9 +127,7 @@ export function useEditorActions() {
 		() => {
 			const fps = editor.project.getActive().settings.fps;
 			const ticksPerFrame = mediaTime({
-				ticks: Math.round(
-					(TICKS_PER_SECOND * fps.denominator) / fps.numerator,
-				),
+				ticks: Math.round((TICKS_PER_SECOND * fps.denominator) / fps.numerator),
 			});
 			editor.playback.seek({
 				time: minMediaTime({
@@ -148,9 +147,7 @@ export function useEditorActions() {
 		() => {
 			const fps = editor.project.getActive().settings.fps;
 			const ticksPerFrame = mediaTime({
-				ticks: Math.round(
-					(TICKS_PER_SECOND * fps.denominator) / fps.numerator,
-				),
+				ticks: Math.round((TICKS_PER_SECOND * fps.denominator) / fps.numerator),
 			});
 			editor.playback.seek({
 				time: maxMediaTime({
@@ -300,6 +297,7 @@ export function useEditorActions() {
 	useActionHandler(
 		"delete-selected",
 		() => {
+			if (removeSelectedTransition(editor)) return;
 			switch (editor.selection.getActiveSelectionKind()) {
 				case "mask-points":
 					if (!selectedMaskPointSelection) {

@@ -105,10 +105,12 @@ export class CanvasRenderer {
 		node,
 		time,
 		targetCanvas,
+		destinationRect,
 	}: {
 		node: AnyBaseNode;
 		time: number;
 		targetCanvas: HTMLCanvasElement | OffscreenCanvas;
+		destinationRect?: { x: number; y: number; width: number; height: number };
 	}) {
 		await this.render({ node, time, completeFrame: false });
 
@@ -119,16 +121,22 @@ export class CanvasRenderer {
 		if (!ctx) {
 			throw new Error("Failed to get target canvas context");
 		}
+		// Export can target an exact social frame with a different aspect ratio.
+		// Center the fully rendered project at output resolution, preserving its shape.
+		if (destinationRect) {
+			ctx.fillStyle = "#000";
+			ctx.fillRect(0, 0, targetCanvas.width, targetCanvas.height);
+		}
 
 		measureSpanSync({
 			name: "drawImage",
 			fn: () =>
 				ctx.drawImage(
 					wasmCompositor.getCanvas(),
-					0,
-					0,
-					targetCanvas.width,
-					targetCanvas.height,
+					destinationRect?.x ?? 0,
+					destinationRect?.y ?? 0,
+					destinationRect?.width ?? targetCanvas.width,
+					destinationRect?.height ?? targetCanvas.height,
 				),
 		});
 		onRenderPerfFrameComplete();

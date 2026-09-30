@@ -5,6 +5,9 @@ import type { BlendMode, Transform } from "@/rendering";
 import type { RetimeConfig, VisualElement } from "@/timeline";
 
 export interface VisualNodeParams {
+	motion?: import("@/motion/types").ClipMotion;
+	/** Render-only source handle; does not shift timeline or audio. */
+	postRoll?: number;
 	duration: number;
 	timeOffset: number;
 	trimStart: number;
@@ -27,6 +30,7 @@ export interface ResolvedVisualNodeState {
 
 export interface ResolvedVisualSourceNodeState extends ResolvedVisualNodeState {
 	source: CanvasImageSource;
+	sourceVersion?: number;
 	sourceWidth: number;
 	sourceHeight: number;
 }

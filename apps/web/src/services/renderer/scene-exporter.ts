@@ -1,4 +1,9 @@
 import EventEmitter from "eventemitter3";
+import { fitExportFrame } from "@/export/settings";
+import {
+	EXPORT_AUDIO_BITRATE,
+	requireExportAudioCodec,
+} from "@/export/audio-codec";
 
 import {
 	Output,
@@ -74,6 +79,7 @@ export type SceneExporterEvents = {
 export class SceneExporter extends EventEmitter<SceneExporterEvents> {
 	private renderer: CanvasRenderer;
 	private encodingCanvas: OffscreenCanvas;
+	private outputFrame: ReturnType<typeof fitExportFrame>;
 	private format: ExportFormat;
 	private quality: ExportQuality;
 	private shouldIncludeAudio: boolean;
@@ -101,11 +107,17 @@ export class SceneExporter extends EventEmitter<SceneExporterEvents> {
 		nativeVideoSink,
 	}: ExportParams) {
 		super();
-		this.renderer = new CanvasRenderer({
+		this.outputFrame = fitExportFrame({
 			width,
 			height,
 			outputWidth,
 			outputHeight,
+		});
+		this.renderer = new CanvasRenderer({
+			width,
+			height,
+			outputWidth: this.outputFrame.width,
+			outputHeight: this.outputFrame.height,
 			fps,
 		});
 		this.encodingCanvas = new OffscreenCanvas(outputWidth, outputHeight);
@@ -171,21 +183,15 @@ export class SceneExporter extends EventEmitter<SceneExporterEvents> {
 
 		let audioSource: AudioBufferSource | null = null;
 		if (this.shouldIncludeAudio && this.audioBuffer) {
-			let audioCodec: "aac" | "opus" = this.format === "webm" ? "opus" : "aac";
-
-			if (audioCodec === "aac" && typeof AudioEncoder !== "undefined") {
-				const { supported } = await AudioEncoder.isConfigSupported({
-					codec: "mp4a.40.2",
-					sampleRate: this.audioBuffer.sampleRate,
-					numberOfChannels: this.audioBuffer.numberOfChannels,
-					bitrate: 192000,
-				});
-				if (!supported) audioCodec = "opus";
-			}
+			const audioCodec = await requireExportAudioCodec({
+				format: this.format,
+				sampleRate: this.audioBuffer.sampleRate,
+				numberOfChannels: this.audioBuffer.numberOfChannels,
+			});
 
 			audioSource = new AudioBufferSource({
 				codec: audioCodec,
-				bitrate: qualityMap[this.quality],
+				bitrate: EXPORT_AUDIO_BITRATE,
 			});
 			output.addAudioTrack(audioSource);
 		}
@@ -346,6 +352,7 @@ export class SceneExporter extends EventEmitter<SceneExporterEvents> {
 					node: rootNode,
 					time: timeTicks,
 					targetCanvas: this.encodingCanvas,
+					destinationRect: this.outputFrame,
 				}),
 			isCancelled: () => this.isCancelled,
 		});

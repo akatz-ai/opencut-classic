@@ -20,6 +20,141 @@ analysis, return visual contact sheets, create reusable time-aligned
 transcripts, apply a reviewed cut plan as one undoable command, and render a
 revision-checked MP4 artifact.
 
+## Live rough cuts (v1)
+
+The CLI and MCP now expose `edit_batch` through the **mounted editor**, not by
+writing browser storage or evaluating JavaScript in its console. A pure Rust
+planner (`rust/crates/roughcut`, compiled to WASM) validates a complete batch
+before the browser commits it through `TracksSnapshotCommand` as one undo step.
+Preview and export use the normal editor renderer.
+
+### Inspect only what is needed
+
+`projects` lists fresh editor sessions, not historical project snapshots. Each
+mounted window has its own `sessionId`; refresh creates a new one. Heartbeats
+expire after 10 seconds, so a recently closed window can remain listed briefly.
+When two sessions share a project, project-only commands fail rather than guess.
+Always pass the inspected session explicitly when possible.
+
+```sh
+bun apps/agent/src/cli.ts projects
+bun apps/agent/src/cli.ts inspect --project PROJECT --session SESSION
+bun apps/agent/src/cli.ts inspect --project PROJECT --session SESSION --detail media --limit 20
+bun apps/agent/src/cli.ts inspect --project PROJECT --session SESSION --detail timeline --start 0 --end 30
+bun apps/agent/src/cli.ts inspect --project PROJECT --session SESSION --detail clip --clip CLIP
+bun apps/agent/src/cli.ts catalog --project PROJECT --session SESSION
+bun apps/agent/src/cli.ts catalog --project PROJECT --session SESSION --definition graphic:akatz-arrow
+```
+
+Overview includes revision, scene, playhead, selection, media count, and track
+IDs/counts. Timeline/media pages accept `--offset` and `--limit` (maximum 100).
+Only `--detail full` returns the entire document. Catalog lists operation shapes
+and definition keys; a second request discloses one definition's parameters.
+
+### Plan, dry-run, apply, review
+
+Use stable caller-chosen clip/track IDs (letters, numbers, `_`, `-`, up to 100
+characters). A plan file contains `{"operations": [...]}`, with 1–100 operations:
+
+```json
+{
+  "operations": [
+    { "op": "insert", "id": "opening-shot", "trackId": "MAIN_TRACK_ID", "kind": "video", "mediaId": "MEDIA_ID", "startSeconds": 0, "sourceInSeconds": 2, "durationSeconds": 3 },
+    { "op": "addTrack", "id": "titles", "kind": "text", "name": "Hook title" },
+    { "op": "insert", "id": "hook", "trackId": "titles", "kind": "text", "startSeconds": 0, "durationSeconds": 3, "params": { "content": "Build worlds locally", "fontSize": 10 } },
+    { "op": "setMotion", "id": "hook", "edge": "enter", "kind": "pop", "durationSeconds": 0.3 }
+  ]
+}
+```
+
+```sh
+bun apps/agent/src/cli.ts edit --project PROJECT --session SESSION \
+  --expected-revision REVISION --key hook-preview-1 --plan hook.json --dry-run
+bun apps/agent/src/cli.ts edit --project PROJECT --session SESSION \
+  --expected-revision REVISION --key hook-apply-1 --plan hook.json
+```
+
+Dry-run validates the exact same plan without changing the timeline. It returns
+changed IDs, resulting track counts and duration. Commit rechecks the live
+revision/session, then saves; the user can undo the whole batch once. The agent
+does not select clips, move the playhead, or start playback for a rough-cut edit.
+The visible **Agent ready / Agent paused** button controls future commands in
+that window. Pause does not cancel an already-running export or transcription.
+
+Available operations: add track; insert video/audio/image/text/graphic; merge
+static parameters; move/remove clips; set/bypass an effect instance; set/remove
+entrance, exit, or between-clips motion. `setEffect` replaces matching effect IDs
+and fills omitted parameters with defaults. Inserted source ranges play at 1x.
+Times are seconds quantized to project frames; IDs/media, source bounds, types,
+parameter ranges, same-track collisions and transition handles are validated.
+Tracks are explicit: overlapping visuals require separate tracks. Move/remove
+do not ripple. Use the existing reviewed global `apply-cuts` operation for
+ripple deletion; it now also checks for human edits after async native planning.
+
+Parameter keys/defaults come from the same registries as the UI. Positions are
+canvas pixels relative to center; opacity is 0–1; volume is dB. Text size uses
+OpenCut units (`fontSize * canvasHeight / 90` pixels), not CSS pixels.
+
+### Delivery safeguards
+
+- Edits require exact project, session, revision, and an idempotency key. The
+  browser also rejects edits during playback, export, pointer interaction,
+  timeline preview edits, or focused text/slider input.
+- Queue claims are atomic. A retry with the same key and identical inputs returns
+  the original command/receipt, even after undo; it never replays the edit.
+  Changed inputs require a new key. Dry-run and commit use different keys.
+- Undelivered commands expire after 30 seconds. Expiry does not cancel an
+  already-started operation. A crashed consumer is **not** automatically retried.
+- A client timeout is not cancellation. Use
+  `command-status --project PROJECT --command COMMAND_ID`. If delivery or receipt
+  publication is uncertain, inspect the editor before deciding what to do next;
+  never blindly resubmit with a new key.
+- This remains a trusted-local bridge with loopback host/origin checks, not a
+  multi-user authenticated service. Do not expose it through a public proxy.
+
+MCP equivalents: `list_projects`, `inspect_project`, `rough_cut_catalog`,
+`edit_timeline` (defaults to dry-run), and `command_status`. Existing stage,
+contact-sheet, transcription, cut and export tools also accept a session.
+Restart the MCP connection to discover newly added tools. An already-open editor
+must be refreshed after deploying this version to publish its session identity.
+
+### Scope and next increment
+
+This is the live execution foundation, not autonomous creative judgment. Existing
+local transcription and contact sheets remain available. Persistent visual media
+indexing, reference-video-to-edit matching, a proposal/review UI, semantic search,
+agent frame-capture tooling, keyframe authoring, trim/retime commands, and durable
+job cancellation are not supplied by this slice. Parameter/effect editing rejects
+already-keyframed clips to avoid unintentionally overriding their animation.
+
+### Regression checks
+
+`cargo test -p roughcut` covers pure plan validation. The bridge tests exercise
+fresh/ambiguous sessions, revision/pause gates, atomic queue claims, idempotent
+retry and bounded inspection. The live smoke test uses a private Chrome profile,
+creates its own project, imports a synthetic source through the UI, and makes all
+timeline edits through CLI/MCP. It checks undo/redo, save/reload, an asynchronous
+planning race against a human edit, busy-input protection, preview and export.
+It leaves its evidence and profile under a newly created `/tmp/opencut-live-test-*`.
+
+Run against a separately started local build (default port 3004):
+
+```sh
+PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs \
+  ORIGIN=http://127.0.0.1:3004 node apps/agent/test/live-roughcut.mjs
+```
+
+This Linux hardware-browser check needs Chrome, Playwright, Bun and FFmpeg; set
+`CHROME_BIN` if Chrome is elsewhere. It does not use the normal desktop profile.
+
+Verified on the installed local build on 2026-09-15: CLI and MCP smoke test,
+301 Bun tests, 30 targeted Rust tests, type checks and production build passed.
+The smoke export decoded without errors: 3 seconds, 90 H.264 frames at 640x360,
+AAC-LC audio with non-silent decoded samples. A paused seek to frame 15 was
+visually checked after fixing mutable-canvas texture cache invalidation;
+between-clips motion was also checked in the decoded output. Local evidence:
+`/home/akatz/Downloads/opencut-agent-roughcut-20260915/`.
+
 ## CLI
 
 ```sh

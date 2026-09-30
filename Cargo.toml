@@ -8,5 +8,9 @@ members = [
     "rust/crates/effects",
     "rust/crates/gpu",
     "rust/crates/masks",
+    "rust/crates/motion",
+    "rust/crates/roughcut",
+    "rust/crates/export-settings",
+    "rust/crates/audio-envelope",
     "rust/wasm", "rust/crates/compositor", "rust/crates/media",
 ]

@@ -2,7 +2,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { inspectProject, listProjects, runCommand } from "./client";
+import { commandStatus, inspectView, listProjects, runCommand } from "./client";
 import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -34,11 +34,101 @@ server.registerTool(
 	"inspect_project",
 	{
 		description:
-			"Return the live project, active scene, complete timeline tracks, media metadata, playhead, and revision.",
-		inputSchema: { project_id: z.string() },
+			"Inspect a fresh editor session. Starts compact; request media/timeline pages, one clip, or explicit full state. Use returned sessionId and revision for edits.",
+		inputSchema: {
+			project_id: z.string(),
+			session_id: z.string().optional(),
+			detail: z
+				.enum(["overview", "media", "timeline", "clip", "full"])
+				.default("overview"),
+			clip_id: z.string().optional(),
+			offset: z.number().int().nonnegative().optional(),
+			limit: z.number().int().min(1).max(100).optional(),
+			start: z.number().nonnegative().optional(),
+			end: z.number().positive().optional(),
+		},
 		annotations: { readOnlyHint: true },
 	},
-	async ({ project_id }) => toolResult(await inspectProject(project_id)),
+	async ({ project_id, session_id, clip_id, ...rest }) =>
+		toolResult(
+			await inspectView(
+				project_id,
+				Object.fromEntries(
+					Object.entries({ ...rest, sessionId: session_id, clipId: clip_id })
+						.filter(([, v]) => v !== undefined)
+						.map(([k, v]) => [k, String(v)]),
+				),
+			),
+		),
+);
+
+server.registerTool(
+	"rough_cut_catalog",
+	{
+		description:
+			"Discover rough-cut operation shapes and available graphic/effect definitions; request a definition key for its exact parameters and defaults.",
+		inputSchema: {
+			project_id: z.string(),
+			session_id: z.string().optional(),
+			definition: z.string().optional(),
+		},
+		annotations: { readOnlyHint: true },
+	},
+	async ({ project_id, session_id, definition }) =>
+		toolResult(
+			await runCommand({
+				projectId: project_id,
+				sessionId: session_id,
+				kind: "catalog",
+				payload: { definition },
+			}),
+		),
+);
+
+server.registerTool(
+	"edit_timeline",
+	{
+		description:
+			"Apply a validated rough-cut batch to the live editor as one undo step. Discover operations via rough_cut_catalog. First dry-run, then commit with a different key. Requires exact session and revision. Retry uncertain delivery only with the SAME key and identical inputs. Rejects stale, busy, or paused editors; does not ripple automatically.",
+		inputSchema: {
+			project_id: z.string(),
+			session_id: z.string(),
+			expected_revision: z.string(),
+			idempotency_key: z.string(),
+			operations: z.array(z.record(z.string(), z.unknown())).min(1).max(100),
+			dry_run: z.boolean().default(true),
+		},
+	},
+	async ({
+		project_id,
+		session_id,
+		expected_revision,
+		idempotency_key,
+		operations,
+		dry_run,
+	}) =>
+		toolResult(
+			await runCommand({
+				projectId: project_id,
+				sessionId: session_id,
+				expectedRevision: expected_revision,
+				idempotencyKey: idempotency_key,
+				kind: "edit_batch",
+				payload: { operations, dryRun: dry_run },
+			}),
+		),
+);
+
+server.registerTool(
+	"command_status",
+	{
+		description:
+			"Retrieve an agent command receipt after a timeout. Pending does not mean cancelled; never blindly submit the edit with a new key.",
+		inputSchema: { project_id: z.string(), command_id: z.string() },
+		annotations: { readOnlyHint: true },
+	},
+	async ({ project_id, command_id }) =>
+		toolResult(await commandStatus(project_id, command_id)),
 );
 
 server.registerTool(
@@ -46,14 +136,19 @@ server.registerTool(
 	{
 		description:
 			"Stream one OpenCut media asset to a temporary local artifact for transcription or FFmpeg analysis.",
-		inputSchema: { project_id: z.string(), media_id: z.string() },
+		inputSchema: {
+			project_id: z.string(),
+			session_id: z.string().optional(),
+			media_id: z.string(),
+		},
 		annotations: { readOnlyHint: true },
 	},
-	async ({ project_id, media_id }) =>
+	async ({ project_id, session_id, media_id }) =>
 		toolResult(
 			await runCommand({
 				projectId: project_id,
 				kind: "stage_media",
+				sessionId: session_id,
 				payload: { mediaId: media_id },
 			}),
 		),
@@ -67,14 +162,16 @@ server.registerTool(
 		inputSchema: {
 			project_id: z.string(),
 			media_id: z.string(),
+			session_id: z.string().optional(),
 			times_seconds: z.array(z.number().nonnegative()).min(1).max(36),
 		},
 		annotations: { readOnlyHint: true },
 	},
-	async ({ project_id, media_id, times_seconds }) => {
+	async ({ project_id, session_id, media_id, times_seconds }) => {
 		const staged = await runCommand({
 			projectId: project_id,
 			kind: "stage_media",
+			sessionId: session_id,
 			payload: { mediaId: media_id, preferProxy: true },
 			timeoutMs: 600_000,
 		});
@@ -109,6 +206,7 @@ server.registerTool(
 		inputSchema: {
 			project_id: z.string(),
 			media_id: z.string().optional(),
+			session_id: z.string().optional(),
 			backend: z.enum(["local", "hyprwhspr"]).default("local"),
 			model: z.string().optional(),
 			language: z.string().default("en"),
@@ -121,12 +219,22 @@ server.registerTool(
 			idempotentHint: false,
 		},
 	},
-	async ({ project_id, media_id, backend, model, language, detail, force }) =>
+	async ({
+		project_id,
+		session_id,
+		media_id,
+		backend,
+		model,
+		language,
+		detail,
+		force,
+	}) =>
 		toolResult(
 			presentTranscriptionResult({
 				result: await transcribeProjectMedia({
 					projectId: project_id,
 					mediaId: media_id,
+					sessionId: session_id,
 					backend,
 					model,
 					language,
@@ -152,6 +260,7 @@ server.registerTool(
 					reason: z.string().optional(),
 				}),
 			),
+			session_id: z.string().optional(),
 		},
 		annotations: {
 			readOnlyHint: false,
@@ -159,11 +268,12 @@ server.registerTool(
 			idempotentHint: false,
 		},
 	},
-	async ({ project_id, expected_revision, ranges }) =>
+	async ({ project_id, session_id, expected_revision, ranges }) =>
 		toolResult(
 			await runCommand({
 				projectId: project_id,
 				kind: "apply_cut_plan",
+				sessionId: session_id,
 				payload: { ranges },
 				expectedRevision: expected_revision,
 			}),
@@ -179,6 +289,7 @@ server.registerTool(
 			project_id: z.string(),
 			expected_revision: z.string(),
 			width: z.number().int().positive().default(1920),
+			session_id: z.string().optional(),
 			height: z.number().int().positive().default(1080),
 			fps: z.number().positive().default(30),
 			video_bitrate: z.number().int().min(100_000).max(200_000_000),
@@ -195,6 +306,7 @@ server.registerTool(
 	},
 	async ({
 		project_id,
+		session_id,
 		expected_revision,
 		width,
 		height,
@@ -209,6 +321,7 @@ server.registerTool(
 			await runCommand({
 				projectId: project_id,
 				kind: "export_project",
+				sessionId: session_id,
 				expectedRevision: expected_revision,
 				payload: {
 					width,
@@ -229,6 +342,12 @@ await server.connect(new StdioServerTransport());
 
 function toolResult(value: unknown) {
 	return {
+		...(typeof value === "object" &&
+		value &&
+		"success" in value &&
+		value.success === false
+			? { isError: true }
+			: {}),
 		content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }],
 		structuredContent: toRecord(value),
 	};

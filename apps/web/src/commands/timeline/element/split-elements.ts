@@ -8,13 +8,48 @@ import { generateUUID } from "@/utils/id";
 import { EditorCore } from "@/core";
 import { isRetimableElement } from "@/timeline";
 import { splitAnimationsAtTime } from "@/animation";
+import { splitClipMotion } from "@/motion";
+import { clampAudioFadesToDuration } from "@/timeline/audio-fades";
 import { getSourceSpanAtClipTime } from "@/retime";
 import {
 	addMediaTime,
 	type MediaTime,
 	roundMediaTime,
 	subMediaTime,
+	ZERO_MEDIA_TIME,
 } from "@/wasm";
+
+function getSplitFadePatch({
+	element,
+	duration,
+	side,
+	preserveBoth,
+}: {
+	element: TimelineElement;
+	duration: MediaTime;
+	side: "left" | "right";
+	preserveBoth: boolean;
+}): { fadeInDuration?: MediaTime; fadeOutDuration?: MediaTime } {
+	if (element.type !== "audio") return {};
+	const adjusted = clampAudioFadesToDuration({
+		element: {
+			...element,
+			duration,
+			fadeInDuration:
+				!preserveBoth && side === "right"
+					? ZERO_MEDIA_TIME
+					: element.fadeInDuration,
+			fadeOutDuration:
+				!preserveBoth && side === "left"
+					? ZERO_MEDIA_TIME
+					: element.fadeOutDuration,
+		},
+	});
+	return {
+		fadeInDuration: adjusted.fadeInDuration,
+		fadeOutDuration: adjusted.fadeOutDuration,
+	};
+}
 
 export class SplitElementsCommand extends Command {
 	private savedState: SceneTracks | null = null;
@@ -118,6 +153,11 @@ export class SplitElementsCommand extends Command {
 					shouldIncludeSplitBoundary: true,
 				});
 				let splitResult: TimelineElement[];
+				const [leftMotion, rightMotion] = splitClipMotion({
+					motion: element.motion,
+					left: leftVisibleDuration,
+					right: rightVisibleDuration,
+				});
 
 				const leftTrimEnd = addMediaTime({
 					a: element.trimEnd,
@@ -136,6 +176,13 @@ export class SplitElementsCommand extends Command {
 							trimEnd: leftTrimEnd,
 							name: `${element.name} (left)`,
 							animations: leftAnimations,
+							motion: leftMotion,
+							...getSplitFadePatch({
+								element,
+								duration: leftVisibleDuration,
+								side: "left",
+								preserveBoth: true,
+							}),
 							...(retimeRef !== undefined ? { retime: retimeRef } : {}),
 						},
 					];
@@ -154,6 +201,13 @@ export class SplitElementsCommand extends Command {
 							trimStart: rightTrimStart,
 							name: `${element.name} (right)`,
 							animations: rightAnimations,
+							motion: rightMotion,
+							...getSplitFadePatch({
+								element,
+								duration: rightVisibleDuration,
+								side: "right",
+								preserveBoth: true,
+							}),
 							...(retimeRef !== undefined ? { retime: retimeRef } : {}),
 						},
 					];
@@ -170,6 +224,13 @@ export class SplitElementsCommand extends Command {
 							trimEnd: leftTrimEnd,
 							name: `${element.name} (left)`,
 							animations: leftAnimations,
+							motion: leftMotion,
+							...getSplitFadePatch({
+								element,
+								duration: leftVisibleDuration,
+								side: "left",
+								preserveBoth: false,
+							}),
 							...(retimeRef !== undefined ? { retime: retimeRef } : {}),
 						},
 						{
@@ -180,6 +241,13 @@ export class SplitElementsCommand extends Command {
 							trimStart: rightTrimStart,
 							name: `${element.name} (right)`,
 							animations: rightAnimations,
+							motion: rightMotion,
+							...getSplitFadePatch({
+								element,
+								duration: rightVisibleDuration,
+								side: "right",
+								preserveBoth: false,
+							}),
 							...(retimeRef !== undefined ? { retime: retimeRef } : {}),
 						},
 					];

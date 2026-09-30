@@ -1,4 +1,5 @@
 import type { AgentProjectSnapshot } from "@/agent-bridge/types";
+import { presentAgentState } from "@/agent-bridge/inspect";
 import { requireLocalNativeRequest } from "@/server/native-media/engine";
 import {
 	listAgentStates,
@@ -12,11 +13,20 @@ export const dynamic = "force-dynamic";
 export async function GET(request: Request) {
 	try {
 		requireLocalNativeRequest(request);
-		const projectId = new URL(request.url).searchParams.get("projectId");
-		if (!projectId) return Response.json({ projects: await listAgentStates() });
-		const state = await readAgentState({ projectId });
+		const query = new URL(request.url).searchParams;
+		const projectId = query.get("projectId");
+		if (!projectId)
+			return Response.json({
+				projects: (await listAgentStates()).map((state) =>
+					presentAgentState({ state }),
+				),
+			});
+		const state = await readAgentState({
+			projectId,
+			sessionId: query.get("sessionId") ?? undefined,
+		});
 		return state
-			? Response.json(state)
+			? Response.json(presentAgentState({ state, query }))
 			: Response.json({ error: "Project bridge is offline" }, { status: 404 });
 	} catch (error) {
 		return Response.json(

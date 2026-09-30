@@ -4,6 +4,7 @@ import { BaseNode } from "./base-node";
 
 export type BlurBackgroundNodeParams = {
 	mediaId: string;
+	decodeStreamId?: string;
 	url: string;
 	file: File;
 	mediaType: "video" | "image";
@@ -17,6 +18,7 @@ export type BlurBackgroundNodeParams = {
 
 export type BackdropSource = {
 	source: CanvasImageSource;
+	sourceVersion?: number;
 	width: number;
 	height: number;
 };

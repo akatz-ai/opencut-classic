@@ -1,4 +1,5 @@
 import type { SceneTracks, TimelineTrack } from "@/timeline";
+import { getCutPostRoll, validateClipMotion } from "@/motion";
 import type { MediaAsset } from "@/media/types";
 import { RootNode } from "./nodes/root-node";
 import { VideoNode } from "./nodes/video-node";
@@ -45,8 +46,33 @@ function buildTrackNodes({
 
 	for (const track of tracks) {
 		const elements = getVisibleSortedElements({ track });
+		const postRoll = new Map<string, number>();
+		const invalidMotion = new Set<string>();
+		for (const [index, element] of elements.entries()) {
+			try {
+				if (element.motion)
+					validateClipMotion({
+						motion: element.motion,
+						duration: element.duration,
+					});
+				if (element.motion?.fromPrevious) {
+					const previous = elements[index - 1];
+					const handle = getCutPostRoll({ previous, incoming: element });
+					if (previous) postRoll.set(previous.id, handle);
+				}
+			} catch (error) {
+				if (!isPreview)
+					throw new Error(
+						`Transition on ${element.name}: ${String(error instanceof Error ? error.message : error)}`,
+					);
+				// Keep the editor usable after a trim/move; the persistent UI warning explains
+				// the disabled transition. Export fails rather than silently dropping it.
+				invalidMotion.add(element.id);
+			}
+		}
 
 		for (const element of elements) {
+			const motion = invalidMotion.has(element.id) ? undefined : element.motion;
 			if (element.type === "effect") {
 				nodes.push(
 					new EffectLayerNode({
@@ -69,9 +95,8 @@ function buildTrackNodes({
 					const previewProxy = isPreview ? mediaAsset.proxy : undefined;
 					nodes.push(
 						new VideoNode({
-							mediaId: previewProxy
-								? `${mediaAsset.id}:proxy`
-								: mediaAsset.id,
+							decodeStreamId: `clip:${element.id}`,
+							mediaId: previewProxy ? `${mediaAsset.id}:proxy` : mediaAsset.id,
 							url: previewProxy?.url ?? mediaAsset.url,
 							file: previewProxy?.file ?? mediaAsset.file,
 							duration: element.duration,
@@ -79,6 +104,8 @@ function buildTrackNodes({
 							trimStart: element.trimStart,
 							trimEnd: element.trimEnd,
 							retime: element.retime,
+							motion,
+							postRoll: postRoll.get(element.id),
 							transform: buildTransformFromParams({ params: element.params }),
 							animations: element.animations,
 							opacity: readOpacityFromParams({ params: element.params }),
@@ -91,6 +118,8 @@ function buildTrackNodes({
 				if (element.type === "image" && mediaAsset.type === "image") {
 					nodes.push(
 						new ImageNode({
+							motion,
+							postRoll: postRoll.get(element.id),
 							url: mediaAsset.url,
 							duration: element.duration,
 							timeOffset: element.startTime,
@@ -114,6 +143,7 @@ function buildTrackNodes({
 				nodes.push(
 					new TextNode({
 						...element,
+						motion,
 						transform: buildTransformFromParams({ params: element.params }),
 						opacity: readOpacityFromParams({ params: element.params }),
 						blendMode: readBlendModeFromParams({ params: element.params }),
@@ -128,6 +158,7 @@ function buildTrackNodes({
 			if (element.type === "sticker") {
 				nodes.push(
 					new StickerNode({
+						motion,
 						stickerId: element.stickerId,
 						intrinsicWidth: element.intrinsicWidth,
 						intrinsicHeight: element.intrinsicHeight,
@@ -147,6 +178,7 @@ function buildTrackNodes({
 			if (element.type === "graphic") {
 				nodes.push(
 					new GraphicNode({
+						motion,
 						definitionId: element.definitionId,
 						params: element.params,
 						duration: element.duration,
@@ -204,9 +236,8 @@ function buildBlurBackgroundNodes({
 			isPreview && mediaAsset.type === "video" ? mediaAsset.proxy : undefined;
 		nodes.push(
 			new BlurBackgroundNode({
-				mediaId: previewProxy
-					? `${mediaAsset.id}:proxy`
-					: mediaAsset.id,
+				decodeStreamId: `background:${element.id}`,
+				mediaId: previewProxy ? `${mediaAsset.id}:proxy` : mediaAsset.id,
 				url: previewProxy?.url ?? mediaAsset.url,
 				file: previewProxy?.file ?? mediaAsset.file,
 				mediaType: mediaAsset.type,

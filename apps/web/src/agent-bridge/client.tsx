@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
+import { applyRoughCut, roughCutCatalog } from "./roughcut";
 import type {
 	AgentBridgeCommand,
 	AgentBridgeCommandResult,
@@ -18,6 +19,12 @@ import { NativeExportSession } from "@/services/native-media/client";
 
 const STATE_HEARTBEAT_MS = 1000;
 const COMMAND_POLL_MS = 350;
+type LiveSession = {
+	sessionId: string;
+	paused: boolean;
+	disposed: boolean;
+	pointerDown: boolean;
+};
 
 declare global {
 	interface Window {
@@ -27,16 +34,35 @@ declare global {
 
 export function AgentBridge() {
 	const editor = useEditor();
+	const [paused, setPaused] = useState(false);
+	const sessionRef = useRef<LiveSession | null>(null);
 
 	useEffect(() => {
 		let disposed = false;
+		const session: LiveSession = {
+			sessionId: crypto.randomUUID(),
+			paused: false,
+			disposed: false,
+			pointerDown: false,
+		};
+		sessionRef.current = session;
+		const down = () => {
+			session.pointerDown = true;
+		};
+		const up = () => {
+			session.pointerDown = false;
+		};
+		window.addEventListener("pointerdown", down);
+		window.addEventListener("pointerup", up);
+		window.addEventListener("pointercancel", up);
+		window.addEventListener("blur", up);
 		let pollTimer: ReturnType<typeof setTimeout> | null = null;
 		let publishTimer: ReturnType<typeof setTimeout> | null = null;
 		const projectId = editor.project.getActive().metadata.id;
 
 		const publish = async () => {
 			if (disposed) return;
-			const snapshot = buildAgentSnapshot({ editor });
+			const snapshot = buildAgentSnapshot({ editor, session });
 			window.__opencutAgentSnapshot = snapshot;
 			await fetch("/api/agent-bridge/state", {
 				method: "POST",
@@ -56,13 +82,13 @@ export function AgentBridge() {
 			if (disposed) return;
 			try {
 				const response = await fetch(
-					`/api/agent-bridge/commands?projectId=${encodeURIComponent(projectId)}`,
+					`/api/agent-bridge/commands?projectId=${encodeURIComponent(projectId)}&sessionId=${session.sessionId}`,
 					{ cache: "no-store" },
 				);
 				if (response.ok) {
 					const body: unknown = await response.json();
 					const command = readCommand(body);
-					if (command) await executeAgentCommand({ editor, command });
+					if (command) await executeAgentCommand({ editor, command, session });
 				}
 			} catch (error) {
 				console.warn("[agent-bridge] Command poll failed:", error);
@@ -84,6 +110,11 @@ export function AgentBridge() {
 
 		return () => {
 			disposed = true;
+			session.disposed = true;
+			window.removeEventListener("pointerdown", down);
+			window.removeEventListener("pointerup", up);
+			window.removeEventListener("pointercancel", up);
+			window.removeEventListener("blur", up);
 			if (pollTimer) clearTimeout(pollTimer);
 			if (publishTimer) clearTimeout(publishTimer);
 			clearInterval(heartbeat);
@@ -92,13 +123,28 @@ export function AgentBridge() {
 		};
 	}, [editor]);
 
-	return null;
+	return (
+		<button
+			type="button"
+			className="fixed bottom-1 right-3 z-50 rounded bg-background/90 px-2 py-1 text-xs text-muted-foreground border"
+			title="Pause or allow agent commands for this editor window"
+			aria-pressed={paused}
+			onClick={() => {
+				if (sessionRef.current) sessionRef.current.paused = !paused;
+				setPaused(!paused);
+			}}
+		>
+			{paused ? "Agent paused" : "Agent ready"}
+		</button>
+	);
 }
 
 function buildAgentSnapshot({
 	editor,
+	session,
 }: {
 	editor: EditorCore;
+	session: LiveSession;
 }): AgentProjectSnapshot {
 	const project = editor.project.getActive();
 	const activeScene = editor.scenes.getActiveScene();
@@ -124,6 +170,9 @@ function buildAgentSnapshot({
 		media,
 	});
 	return {
+		sessionId: session.sessionId,
+		agentPaused: session.paused,
+		selectedElements: editor.selection.getSelectedElements(),
 		revision: hashString(revisionInput),
 		capturedAt: new Date().toISOString(),
 		project: {
@@ -175,6 +224,8 @@ function readCommand(value: unknown): AgentBridgeCommand | null {
 		!("kind" in command) ||
 		!(
 			command.kind === "stage_media" ||
+			command.kind === "edit_batch" ||
+			command.kind === "catalog" ||
 			command.kind === "apply_cut_plan" ||
 			command.kind === "export_project"
 		)
@@ -193,6 +244,12 @@ function readCommand(value: unknown): AgentBridgeCommand | null {
 		return null;
 	}
 	return {
+		...("sessionId" in command && typeof command.sessionId === "string"
+			? { sessionId: command.sessionId }
+			: {}),
+		...("expiresAt" in command && typeof command.expiresAt === "string"
+			? { expiresAt: command.expiresAt }
+			: {}),
 		id: command.id,
 		projectId: command.projectId,
 		kind: command.kind,
@@ -211,13 +268,44 @@ function readCommand(value: unknown): AgentBridgeCommand | null {
 async function executeAgentCommand({
 	editor,
 	command,
+	session,
 }: {
 	editor: EditorCore;
 	command: AgentBridgeCommand;
+	session: LiveSession;
 }): Promise<void> {
 	let result: AgentBridgeCommandResult;
 	try {
-		const before = buildAgentSnapshot({ editor });
+		const before = buildAgentSnapshot({ editor, session });
+		const assertCurrent = () => {
+			if (session.disposed || session.paused)
+				throw new Error("Agent session is closed or paused");
+			if (
+				command.sessionId !== session.sessionId ||
+				command.projectId !== editor.project.getActive().metadata.id
+			)
+				throw new Error("Agent session or project mismatch");
+			if (!command.expiresAt || Date.now() > Date.parse(command.expiresAt))
+				throw new Error("Agent command expired before execution");
+			if (buildAgentSnapshot({ editor, session }).revision !== before.revision)
+				throw new Error("Editor changed during planning; inspect and re-plan");
+			if (command.kind === "edit_batch" || command.kind === "apply_cut_plan") {
+				const focused = document.activeElement;
+				if (
+					editor.playback.getIsPlaying() ||
+					editor.project.getExportState().isExporting ||
+					editor.timeline.isPreviewActive() ||
+					session.pointerDown ||
+					focused?.matches(
+						"input,textarea,[contenteditable=true],[role=slider]",
+					)
+				)
+					throw new Error(
+						"Editor busy: finish playback or the current interaction first",
+					);
+			}
+		};
+		assertCurrent();
 		if (
 			command.expectedRevision &&
 			command.expectedRevision !== before.revision
@@ -228,15 +316,30 @@ async function executeAgentCommand({
 		}
 
 		let commandResult: Record<string, unknown>;
-		if (command.kind === "stage_media") {
+		if (command.kind === "edit_batch") {
+			if (!command.expectedRevision)
+				throw new Error("expectedRevision is required");
+			commandResult = applyRoughCut({
+				editor,
+				snapshot: before,
+				payload: command.payload,
+				assertCurrent,
+			});
+		} else if (command.kind === "catalog") {
+			commandResult = roughCutCatalog(command.payload.definition);
+		} else if (command.kind === "stage_media") {
 			commandResult = await stageMedia({ editor, payload: command.payload });
 		} else if (command.kind === "apply_cut_plan") {
-			commandResult = await applyCutPlan({ editor, payload: command.payload });
+			commandResult = await applyCutPlan({
+				editor,
+				payload: command.payload,
+				assertCurrent,
+			});
 		} else {
 			commandResult = await exportProject({ editor, payload: command.payload });
 		}
 		await editor.save.flush();
-		const after = buildAgentSnapshot({ editor });
+		const after = buildAgentSnapshot({ editor, session });
 		window.__opencutAgentSnapshot = after;
 		result = {
 			commandId: command.id,
@@ -250,7 +353,7 @@ async function executeAgentCommand({
 			commandId: command.id,
 			success: false,
 			completedAt: new Date().toISOString(),
-			error: error instanceof Error ? error.message : "Agent command failed",
+			error: error instanceof Error ? error.message : String(error),
 		};
 	}
 	await fetch(`/api/agent-bridge/commands/${command.id}`, {
@@ -295,9 +398,11 @@ async function stageMedia({
 async function applyCutPlan({
 	editor,
 	payload,
+	assertCurrent,
 }: {
 	editor: EditorCore;
 	payload: Record<string, unknown>;
+	assertCurrent: () => void;
 }): Promise<Record<string, unknown>> {
 	if (!Array.isArray(payload.ranges))
 		throw new Error("ranges must be an array");
@@ -346,6 +451,7 @@ async function applyCutPlan({
 	// changes timeline timing, trims, names, and generated IDs.
 	// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
 	const after = nativeResult.tracks as SceneTracks;
+	assertCurrent();
 	const wasRippleEnabled = editor.command.isRippleEnabled;
 	try {
 		// The native planner has already applied one global ripple across every
@@ -433,7 +539,10 @@ async function exportProject({
 				encoder,
 			} satisfies ExportOptions,
 			destination: browserCaptureSession
-				? { writable: browserCaptureSession.createVideoDestination() }
+				? {
+						writable: browserCaptureSession.createVideoDestination(),
+						writeResponse: stageArtifact,
+					}
 				: {
 						writable: unavailableWritable,
 						writeResponse: stageArtifact,
@@ -446,7 +555,7 @@ async function exportProject({
 					: (result.error ?? "Agent export failed"),
 			);
 		}
-		if (browserCaptureSession) {
+		if (browserCaptureSession && !artifact) {
 			const response = await browserCaptureSession.finalize({
 				spec: null,
 				videoTranscode:

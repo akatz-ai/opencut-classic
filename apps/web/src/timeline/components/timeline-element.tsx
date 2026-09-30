@@ -5,6 +5,7 @@ import { useEditor } from "@/editor/use-editor";
 import { useAssetsPanelStore } from "@/components/editor/panels/assets/assets-panel-store";
 import { AudioWaveform, WAVEFORM_GAIN_SAMPLE_COUNT } from "./audio-waveform";
 import { AudioVolumeLine } from "./audio-volume-line";
+import { AudioFadeHandles } from "./audio-fade-handles";
 import { useElementPreview } from "@/timeline/hooks/use-element-preview";
 import {
 	useKeyframeDrag,
@@ -63,6 +64,8 @@ import {
 } from "@/actions";
 import { resolveStickerId } from "@/stickers";
 import { buildGraphicPreviewUrl } from "@/graphics";
+import { TransitionBoundary } from "@/motion/transition-boundary";
+import { useTransitionSelectionStore } from "@/motion/transition-selection";
 import Image from "next/image";
 import {
 	ScissorIcon,
@@ -555,6 +558,7 @@ function ElementInner({
 	isDropTarget?: boolean;
 }) {
 	const visibleElement = displayElement ?? element;
+	const motionPixelsPerSecond = useContext(PixelsPerSecondContext) ?? 1;
 	const isReducedOpacity =
 		(canElementBeHidden(visibleElement) && visibleElement.hidden) ||
 		isDropTarget;
@@ -585,9 +589,17 @@ function ElementInner({
 					<button
 						type="button"
 						tabIndex={-1}
+						aria-label={`Select ${element.name}`}
+						data-element-id={element.id}
 						className="absolute inset-0 size-full flex flex-col"
 						onClick={(event) => onElementClick({ event, element })}
-						onMouseDown={(event) => onElementMouseDown({ event, element })}
+						onMouseDown={(event) => {
+							useTransitionSelectionStore.setState({
+								target: null,
+								selection: null,
+							});
+							onElementMouseDown({ event, element });
+						}}
 					>
 						<div
 							className={cn(
@@ -610,6 +622,12 @@ function ElementInner({
 				</div>
 			</div>
 
+			<TransitionBoundary
+				element={element}
+				track={track}
+				pixelsPerSecond={motionPixelsPerSecond}
+				height={baseTrackHeight}
+			/>
 			{isSelected && (
 				<>
 					<ResizeHandle
@@ -1053,6 +1071,7 @@ function AudioElementContent({
 						color={TIMELINE_TRACK_THEME.audio.waveformColor}
 					/>
 					<AudioVolumeLine element={element} trackId={trackId} />
+					<AudioFadeHandles element={element} trackId={trackId} />
 				</div>
 			</div>
 		);
@@ -1066,6 +1085,7 @@ function AudioElementContent({
 				</span>
 			</div>
 			<AudioVolumeLine element={element} trackId={trackId} />
+			<AudioFadeHandles element={element} trackId={trackId} />
 		</div>
 	);
 }

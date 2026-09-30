@@ -55,6 +55,7 @@ import { toast } from "sonner";
 import {
 	DEFAULT_EXPORT_QUALITY_SLIDER,
 	EXPORT_RESOLUTION_PRESETS,
+	EXPORT_RESOLUTION_LABELS,
 	estimateExportSizeRangeBytes,
 	formatExportDuration,
 	formatExportSize,
@@ -362,7 +363,7 @@ function ExportPopover({
 															});
 															return (
 																<SelectItem key={preset} value={preset}>
-																	{preset === "project" ? "Project" : preset} ·{" "}
+																	{EXPORT_RESOLUTION_LABELS[preset]} ·{" "}
 																	{dimensions.width}×{dimensions.height}
 																</SelectItem>
 															);
@@ -371,6 +372,13 @@ function ExportPopover({
 												</Select>
 											</ExportSelectRow>
 
+											{resolutionPreset.startsWith("insta_") && (
+												<p className="text-muted-foreground text-[11px] leading-relaxed">
+													Exact 9:16 portrait or 16:9 landscape dimensions.
+													Other canvas ratios fit inside with black padding; no
+													cropping or stretching.
+												</p>
+											)}
 											<ExportSelectRow label="Frame rate">
 												<Select
 													value={fpsSelection}
@@ -466,18 +474,26 @@ function ExportPopover({
 												</Select>
 											</ExportSelectRow>
 											<div className="flex items-center justify-between text-xs">
-												<span className="text-muted-foreground">Quality</span>
+												<span className="text-muted-foreground">
+													Encoding quality
+												</span>
 												<span>{qualityValue}%</span>
 											</div>
 											<Slider
 												min={1}
 												max={100}
+												aria-label="Encoding quality"
 												step={1}
 												value={[qualityValue]}
 												onValueChange={(values) =>
 													setQualityValue(values[0] ?? qualityValue)
 												}
 											/>
+											<p className="text-muted-foreground text-[11px] leading-relaxed">
+												Resolution stays {outputDimensions.width}×
+												{outputDimensions.height} at every quality setting. 100%
+												uses the highest target bitrate, not lossless encoding.
+											</p>
 											<div className="grid grid-cols-2 gap-2 rounded-md border bg-accent/20 p-2 text-xs">
 												<ExportSummary label="Output">
 													{outputDimensions.width}×{outputDimensions.height} ·{" "}

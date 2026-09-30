@@ -2,6 +2,8 @@ import { hasKeyframesForPath } from "@/animation/keyframe-query";
 import { resolveNumberAtTime } from "@/animation/values";
 import { VOLUME_DB_MAX, VOLUME_DB_MIN } from "./audio-constants";
 import type { TimelineElement } from "./types";
+import { evaluateAudioFadeGain } from "opencut-wasm";
+import { getAudioFadeInDuration, getAudioFadeOutDuration } from "./audio-fades";
 const DEFAULT_STEP_SECONDS = 1 / 60;
 
 export type AudioCapableElement = Extract<
@@ -49,6 +51,26 @@ export function hasAnimatedVolume({
 	});
 }
 
+export function hasAudioFades({
+	element,
+}: {
+	element: AudioCapableElement;
+}): boolean {
+	return (
+		element.type === "audio" &&
+		(getAudioFadeInDuration({ element }) > 0 ||
+			getAudioFadeOutDuration({ element }) > 0)
+	);
+}
+
+export function hasAudioEnvelope({
+	element,
+}: {
+	element: AudioCapableElement;
+}): boolean {
+	return hasAnimatedVolume({ element }) || hasAudioFades({ element });
+}
+
 import { TICKS_PER_SECOND } from "@/wasm";
 
 export function resolveEffectiveAudioGain({
@@ -71,7 +93,17 @@ export function resolveEffectiveAudioGain({
 		localTime: Math.round(localTime * TICKS_PER_SECOND),
 	});
 
-	return dBToLinear(resolvedDb);
+	const fadeGain =
+		element.type === "audio"
+			? evaluateAudioFadeGain(
+					element.duration,
+					Math.round(localTime * TICKS_PER_SECOND),
+					getAudioFadeInDuration({ element }),
+					getAudioFadeOutDuration({ element }),
+				)
+			: 1;
+
+	return dBToLinear(resolvedDb) * fadeGain;
 }
 
 export function buildWaveformGainSamples({

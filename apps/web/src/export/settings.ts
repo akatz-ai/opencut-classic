@@ -1,7 +1,14 @@
 import type { ExportBitrateMode, ExportFormat, ExportQuality } from "./index";
+import {
+	resolveExportDimensions as resolveDimensions,
+	fitExportFrame as fitFrame,
+} from "opencut-wasm";
 
 export const EXPORT_RESOLUTION_PRESETS = [
 	"project",
+	"insta_4k",
+	"insta_2k",
+	"insta_hd",
 	"2160p",
 	"1440p",
 	"1080p",
@@ -14,15 +21,17 @@ export const DEFAULT_EXPORT_QUALITY_SLIDER = 60;
 export const MIN_EXPORT_QUALITY_SLIDER = 1;
 export const MAX_EXPORT_QUALITY_SLIDER = 100;
 
-const LONG_EDGE_BY_PRESET: Record<
-	Exclude<ExportResolutionPreset, "project">,
-	number
-> = {
-	"2160p": 3840,
-	"1440p": 2560,
-	"1080p": 1920,
-	"720p": 1280,
-};
+export const EXPORT_RESOLUTION_LABELS: Record<ExportResolutionPreset, string> =
+	{
+		project: "Project",
+		insta_hd: "Insta HD",
+		insta_2k: "Insta 2K",
+		insta_4k: "Insta 4K",
+		"2160p": "2160p",
+		"1440p": "1440p",
+		"1080p": "1080p",
+		"720p": "720p",
+	};
 
 const QUALITY_SLIDER_BY_LEGACY_PRESET: Record<ExportQuality, number> = {
 	low: 25,
@@ -44,26 +53,21 @@ export function resolveExportDimensions({
 	projectHeight: number;
 	preset: ExportResolutionPreset;
 }): { width: number; height: number } {
-	if (projectWidth <= 0 || projectHeight <= 0) {
-		throw new Error("Project dimensions must be positive");
-	}
-	if (preset === "project") {
-		return {
-			width: even({ value: projectWidth }),
-			height: even({ value: projectHeight }),
-		};
-	}
-	const longEdge = LONG_EDGE_BY_PRESET[preset];
-	if (projectWidth >= projectHeight) {
-		return {
-			width: longEdge,
-			height: even({ value: (longEdge * projectHeight) / projectWidth }),
-		};
-	}
-	return {
-		width: even({ value: (longEdge * projectWidth) / projectHeight }),
-		height: longEdge,
-	};
+	return resolveDimensions(projectWidth, projectHeight, preset);
+}
+
+export function fitExportFrame({
+	width,
+	height,
+	outputWidth,
+	outputHeight,
+}: {
+	width: number;
+	height: number;
+	outputWidth: number;
+	outputHeight: number;
+}): { width: number; height: number; x: number; y: number } {
+	return fitFrame(width, height, outputWidth, outputHeight);
 }
 
 export function getExportVideoBitrate({
@@ -149,10 +153,6 @@ export function formatExportDuration(milliseconds: number): string {
 	return hours > 0
 		? `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`
 		: `${minutes}:${String(seconds).padStart(2, "0")}`;
-}
-
-function even({ value }: { value: number }): number {
-	return Math.max(2, Math.round(value / 2) * 2);
 }
 
 function clamp({

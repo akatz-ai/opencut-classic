@@ -25,7 +25,6 @@ import type {
 	TextureCanvasDrawFn,
 	TextureUploadDescriptor,
 } from "./types";
-import { DEFAULT_GRAPHIC_SOURCE_SIZE } from "@/graphics";
 
 export async function buildFrameDescriptor({
 	node,
@@ -138,10 +137,8 @@ async function collectNode({
 		const textureId = `${path}:blur-background`;
 		const { outputWidth: width, outputHeight: height } = renderer;
 		const { backdropSource, passes } = node.resolved;
-		// Backdrop pixels come from a decoded video/image frame whose identity
-		// already changes when it changes. Hashing the source reference is
-		// enough to let us skip redraws on frozen frames.
-		const contentHash = `blur:${identityKey(backdropSource.source)}:${backdropSource.width}x${backdropSource.height}:${width}x${height}`;
+		// CanvasSink reuses canvas objects; identity alone does not identify pixels.
+		const contentHash = `blur:${identityKey(backdropSource.source)}:${backdropSource.sourceVersion ?? "static"}:${backdropSource.width}x${backdropSource.height}:${width}x${height}`;
 		textures.set(textureId, {
 			kind: "rendered",
 			id: textureId,
@@ -222,28 +219,47 @@ async function collectVisualSourceNode({
 		return;
 	}
 
-	const source =
-		node instanceof GraphicNode
-			? node.getSource({ resolvedParams: node.resolved.resolvedParams })
-			: node.resolved.source;
-	if (!source) {
-		return;
+	let source: CanvasImageSource;
+	let sourceWidth: number;
+	let sourceHeight: number;
+	let version: string | number | undefined;
+	if (node instanceof GraphicNode) {
+		version = JSON.stringify(node.resolved.resolvedParams);
+		const graphicSource = node.getSource({
+			resolvedParams: node.resolved.resolvedParams,
+			// Quantize to avoid reallocating a canvas for every tiny animated scale step.
+			size: Math.min(
+				8192,
+				Math.max(
+					512,
+					Math.ceil(
+						(Math.min(renderer.outputWidth, renderer.outputHeight) *
+							Math.max(
+								Math.abs(node.resolved.transform.scaleX),
+								Math.abs(node.resolved.transform.scaleY),
+								Math.abs(node.params.transform.scaleX),
+								Math.abs(node.params.transform.scaleY),
+							)) /
+							128,
+					) * 128,
+				),
+			),
+		});
+		source = graphicSource;
+		sourceWidth = graphicSource.width;
+		sourceHeight = graphicSource.height;
+	} else {
+		version = node.resolved.sourceVersion;
+		source = node.resolved.source;
+		sourceWidth = node.resolved.sourceWidth;
+		sourceHeight = node.resolved.sourceHeight;
 	}
-
-	const sourceWidth =
-		node instanceof GraphicNode
-			? DEFAULT_GRAPHIC_SOURCE_SIZE
-			: (node.resolved as ResolvedVisualSourceNodeState).sourceWidth;
-	const sourceHeight =
-		node instanceof GraphicNode
-			? DEFAULT_GRAPHIC_SOURCE_SIZE
-			: (node.resolved as ResolvedVisualSourceNodeState).sourceHeight;
-
 	const textureId = `${path}:source`;
 	textures.set(textureId, {
 		kind: "external",
 		id: textureId,
 		source,
+		version,
 		width: sourceWidth,
 		height: sourceHeight,
 	});
@@ -418,10 +434,7 @@ function buildMaskArtifacts({
 	const feather = body.kind === "drawWithFeather" ? 0 : mask.params.feather;
 
 	const maskTextureId = `${path}:mask`;
-	const {
-		outputWidth: canvasWidth,
-		outputHeight: canvasHeight,
-	} = renderer;
+	const { outputWidth: canvasWidth, outputHeight: canvasHeight } = renderer;
 	const maskContentHash = `mask:${mask.type}:${JSON.stringify(mask.params)}:${transformHash(transform)}:${canvasWidth}x${canvasHeight}:body=${body.kind}:fastPath=${usesOpaqueFastPath}`;
 	const drawMask: TextureCanvasDrawFn = (ctx) => {
 		const { canvas: elementMaskCanvas, context: elementMaskCtx } =

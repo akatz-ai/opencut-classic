@@ -24,6 +24,7 @@ pub struct CanvasClearDescriptor {
 pub enum FrameItemDescriptor {
     Layer(LayerDescriptor),
     SceneEffect {
+        #[serde(rename = "effectPassGroups", alias = "effect_pass_groups")]
         effect_pass_groups: Vec<Vec<EffectPassDescriptor>>,
     },
 }
@@ -80,4 +81,33 @@ pub struct CanvasTextureDescriptor {
     pub id: String,
     pub width: u32,
     pub height: u32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn browser_adjustment_layer_descriptor_round_trips() {
+        let browser = serde_json::json!({
+            "type": "sceneEffect",
+            "effectPassGroups": [[{ "shader": "color-adjust", "uniforms": { "u_exposure": 1.0 } }]],
+        });
+        let item: FrameItemDescriptor = serde_json::from_value(browser.clone()).unwrap();
+        assert_eq!(serde_json::to_value(item).unwrap(), browser);
+    }
+
+    #[test]
+    fn accepts_previous_native_field_spelling() {
+        let item: FrameItemDescriptor = serde_json::from_value(serde_json::json!({
+            "type": "sceneEffect", "effect_pass_groups": [],
+        }))
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(item).unwrap(),
+            serde_json::json!({
+                "type": "sceneEffect", "effectPassGroups": [],
+            })
+        );
+    }
 }

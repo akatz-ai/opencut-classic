@@ -1,8 +1,7 @@
 import type { NextConfig } from "next";
+import path from "node:path";
 import { withBotId } from "botid/next/config";
 import { withContentCollections } from "@content-collections/next";
-
-const useLocalWasm = process.env.OPENCUT_LOCAL_WASM === "1";
 
 const nextConfig: NextConfig = {
 	distDir: process.env.OPENCUT_NEXT_DIST_DIR || ".next",
@@ -12,13 +11,14 @@ const nextConfig: NextConfig = {
 	reactStrictMode: true,
 	productionBrowserSourceMaps: true,
 	output: "standalone",
-	turbopack: useLocalWasm
-		? {
-				resolveAlias: {
-					"opencut-wasm": "../../rust/wasm/pkg",
-				},
-			}
-		: undefined,
+	// The motion and native-rendering additions require the workspace Rust build.
+	// Build it with `bun run build:wasm` before starting/building the web app.
+	turbopack: {
+		root: path.resolve(__dirname, "../.."),
+		resolveAlias: {
+			"opencut-wasm": "./../../rust/wasm/pkg/opencut_wasm.js",
+		},
+	},
 	images: {
 		remotePatterns: [
 			{

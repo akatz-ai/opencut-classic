@@ -1,10 +1,12 @@
 import { graphicsRegistry } from "../registry";
+import { akatzGraphicDefinitions } from "./akatz";
 import { ellipseGraphicDefinition } from "./ellipse";
 import { polygonGraphicDefinition } from "./polygon";
 import { rectangleGraphicDefinition } from "./rectangle";
 import { starGraphicDefinition } from "./star";
 
 const defaultGraphicDefinitions = [
+	...akatzGraphicDefinitions,
 	rectangleGraphicDefinition,
 	ellipseGraphicDefinition,
 	polygonGraphicDefinition,

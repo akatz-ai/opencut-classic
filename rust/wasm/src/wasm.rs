@@ -20,3 +20,11 @@ pub use masks::*;
 #[cfg(target_arch = "wasm32")]
 pub use perf::*;
 pub use time::*;
+mod audio_envelope;
+pub use audio_envelope::*;
+mod motion;
+pub use motion::*;
+mod roughcut;
+pub use roughcut::*;
+mod export_settings;
+pub use export_settings::*;

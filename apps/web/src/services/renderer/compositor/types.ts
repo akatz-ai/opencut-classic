@@ -48,12 +48,14 @@ export type TextureCanvasDrawFn = (
 /**
  * A layer texture whose pixels come from somewhere outside the renderer —
  * typically a decoded video/image frame or a sticker. Cached by reference
- * identity of the source object.
+ * identity and pixel version of the source object.
  */
 export type ExternalTextureDescriptor = {
 	kind: "external";
 	id: string;
 	source: CanvasImageSource;
+	/** Decoders and graphics can repaint an existing canvas without changing its identity. */
+	version?: string | number;
 	width: number;
 	height: number;
 };

@@ -14,6 +14,8 @@ import { usePropertiesStore } from "./stores/properties-store";
 import { getPropertiesConfig } from "./registry";
 import { cn } from "@/utils/ui";
 import { EmptyView } from "./empty-view";
+import { useSelectedTransition } from "@/motion/transition-selection";
+import { TransitionInspector } from "@/motion/transition-inspector";
 
 export function PropertiesPanel() {
 	const editor = useEditor();
@@ -21,6 +23,14 @@ export function PropertiesPanel() {
 	useEditor((e) => e.media.getAssets());
 	const { selectedElements } = useElementSelection();
 	const { activeTabPerType, setActiveTab } = usePropertiesStore();
+	const transitionTarget = useSelectedTransition();
+	if (transitionTarget)
+		return (
+			<TransitionInspector
+				key={`${transitionTarget.trackId}:${transitionTarget.elementId}:${transitionTarget.edge}`}
+				target={transitionTarget}
+			/>
+		);
 
 	if (selectedElements.length === 0) {
 		return (

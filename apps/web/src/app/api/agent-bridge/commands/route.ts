@@ -13,7 +13,11 @@ export async function GET(request: Request) {
 		requireLocalNativeRequest(request);
 		const projectId = new URL(request.url).searchParams.get("projectId");
 		if (!projectId) throw new Error("projectId is required");
-		return Response.json({ command: await takeAgentCommand({ projectId }) });
+		const sessionId =
+			new URL(request.url).searchParams.get("sessionId") ?? undefined;
+		return Response.json({
+			command: await takeAgentCommand({ projectId, sessionId }),
+		});
 	} catch (error) {
 		return Response.json(
 			{ error: error instanceof Error ? error.message : "Agent command error" },
@@ -30,10 +34,14 @@ export async function POST(request: Request) {
 			kind: AgentCommandKind;
 			payload?: Record<string, unknown>;
 			expectedRevision?: string;
+			sessionId?: string;
+			idempotencyKey?: string;
 		} = await request.json();
 		if (
 			!(
 				body.kind === "stage_media" ||
+				body.kind === "edit_batch" ||
+				body.kind === "catalog" ||
 				body.kind === "apply_cut_plan" ||
 				body.kind === "export_project"
 			)
@@ -46,6 +54,8 @@ export async function POST(request: Request) {
 				kind: body.kind,
 				payload: body.payload ?? {},
 				expectedRevision: body.expectedRevision,
+				sessionId: body.sessionId,
+				idempotencyKey: body.idempotencyKey,
 			}),
 		});
 	} catch (error) {

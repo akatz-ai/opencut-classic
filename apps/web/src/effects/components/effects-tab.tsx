@@ -26,6 +26,9 @@ import {
 import { cn } from "@/utils/ui";
 import { Separator } from "@/components/ui/separator";
 import { useAssetsPanelStore } from "@/components/editor/panels/assets/assets-panel-store";
+import { buildDefaultParamValues } from "@/params/registry";
+import { Slider } from "@/components/ui/slider";
+import { RotateCcw } from "lucide-react";
 
 export function StandaloneEffectTab({
 	element,
@@ -63,6 +66,14 @@ export function StandaloneEffectTab({
 				renderParams={(renderElement as EffectElement).params}
 				previewParam={previewParam}
 				onCommit={commit}
+				onReset={() => {
+					previewUpdates({
+						params: buildDefaultParamValues(
+							effectsRegistry.get(element.effectType).params,
+						),
+					});
+					commit();
+				}}
 			/>
 		</div>
 	);
@@ -179,6 +190,21 @@ export function ClipEffectsTab({
 									renderParams={getRenderParams({ effectId: effect.id })}
 									previewParam={buildPreviewParam(effect.id)}
 									onCommit={commit}
+									onReset={() => {
+										previewUpdates({
+											effects: renderElement.effects?.map((existing) =>
+												existing.id === effect.id
+													? {
+															...existing,
+															params: buildDefaultParamValues(
+																effectsRegistry.get(effect.type).params,
+															),
+														}
+													: existing,
+											),
+										});
+										commit();
+									}}
 									onToggle={() =>
 										editor.timeline.toggleClipEffect({
 											trackId,
@@ -237,6 +263,7 @@ function EffectSection({
 	onCommit,
 	onToggle,
 	onRemove,
+	onReset,
 }: {
 	effect: Effect;
 	renderParams: ParamValues;
@@ -244,6 +271,7 @@ function EffectSection({
 	onCommit: () => void;
 	onToggle?: () => void;
 	onRemove?: () => void;
+	onReset: () => void;
 }) {
 	const definition = effectsRegistry.get(effect.type);
 
@@ -289,6 +317,20 @@ function EffectSection({
 				className={cn("p-0", onToggle && !effect.enabled && "opacity-50")}
 			>
 				<SectionFields>
+					<div className="flex items-center justify-between px-4 py-2">
+						<span className="text-xs text-muted-foreground">
+							{effect.enabled ? "Live preview" : "Bypassed"}
+						</span>
+						<Button
+							variant="ghost"
+							size="sm"
+							aria-label={`Reset ${definition.name}`}
+							title="Reset base values; existing keyframes are preserved"
+							onClick={onReset}
+						>
+							<RotateCcw className="size-3" /> Reset
+						</Button>
+					</div>
 					{definition.params.map((param) => (
 						<div key={param.key} className="flex flex-col gap-3.5">
 							<div className="px-4">
@@ -298,6 +340,23 @@ function EffectSection({
 									onPreview={previewParam(param.key)}
 									onCommit={onCommit}
 								/>
+								{param.type === "number" && param.max !== undefined && (
+									<div className="pt-3 pb-1">
+										<Slider
+											aria-label={param.label}
+											min={param.min}
+											max={param.max}
+											step={param.step}
+											value={[Number(renderParams[param.key] ?? param.default)]}
+											onValueChange={([value]) =>
+												previewParam(param.key)(value)
+											}
+											// Radix fires keyboard commits before onValueChange.
+											// Commit after that final preview has reached the editor.
+											onValueCommit={() => queueMicrotask(onCommit)}
+										/>
+									</div>
+								)}
 							</div>
 							<Separator />
 						</div>

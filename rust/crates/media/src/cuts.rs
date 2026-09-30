@@ -200,6 +200,19 @@ fn cut_element(
                 Value::from(piece_start - removed_before(ranges, piece_start)),
             );
             piece.insert("duration".into(), Value::from(piece_end - piece_start));
+            if let Some(value) = object.get("motion").filter(|v| !v.is_null()) {
+                let mut edge_motion: motion::Motion = serde_json::from_value(value.clone())?;
+                if piece_start != start {
+                    edge_motion.enter = None;
+                    edge_motion.from_previous = false;
+                }
+                if piece_end != end {
+                    edge_motion.exit = None;
+                }
+                let fitted = motion::fit(edge_motion, (piece_end - piece_start) as f64)
+                    .map_err(anyhow::Error::msg)?;
+                piece.insert("motion".into(), serde_json::to_value(fitted)?);
+            }
             piece.insert(
                 "trimStart".into(),
                 Value::from(trim_start + source_start_offset),
@@ -242,6 +255,30 @@ fn number(object: &Map<String, Value>, field: &str) -> Result<i64> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn cutting_does_not_duplicate_edge_transitions_at_internal_cuts() {
+        let tracks = json!({"overlay": [], "audio": [], "main": {"elements": [{
+            "id": "a", "type": "video", "startTime": 0, "duration": 100,
+            "trimStart": 0, "trimEnd": 0,
+            "motion": {"enter": {"kind": "fade", "duration": 10, "easing": "linear"},
+                       "exit": {"kind": "pop", "duration": 10, "easing": "smooth"}}
+        }]}});
+        let result = apply_timeline_cuts(
+            tracks,
+            vec![CutRange {
+                start_time: 40,
+                end_time: 60,
+                reason: None,
+            }],
+        )
+        .unwrap();
+        let elements = result.tracks["main"]["elements"].as_array().unwrap();
+        assert_eq!(elements[0]["motion"]["enter"]["kind"], "fade");
+        assert!(elements[0]["motion"]["exit"].is_null());
+        assert!(elements[1]["motion"]["enter"].is_null());
+        assert_eq!(elements[1]["motion"]["exit"]["kind"], "pop");
+    }
 
     #[test]
     fn cuts_and_ripples_timeline_elements() {

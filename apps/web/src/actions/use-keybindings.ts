@@ -30,6 +30,34 @@ export function useKeybindingsListener() {
 
 			const binding = getKeybindingString(ev);
 			const activeElement = document.activeElement;
+			// Focused inspector widgets own their navigation keys. This capture-phase
+			// listener must not prevent the widget's own keyboard handler.
+			if (
+				activeElement instanceof HTMLElement &&
+				!ev.ctrlKey &&
+				!ev.metaKey &&
+				!ev.altKey
+			) {
+				if (
+					activeElement.closest("[data-ui-slider]") &&
+					[
+						"arrowleft",
+						"arrowright",
+						"arrowup",
+						"arrowdown",
+						"home",
+						"end",
+						"pageup",
+						"pagedown",
+					].includes(normalizedKey)
+				)
+					return;
+				if (
+					activeElement.closest("[data-native-button]") &&
+					["enter", " "].includes(normalizedKey)
+				)
+					return;
+			}
 			const isTextInput =
 				activeElement instanceof HTMLElement &&
 				isTypableDOMElement({ element: activeElement });

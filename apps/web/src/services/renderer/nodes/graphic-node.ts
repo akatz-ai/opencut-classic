@@ -34,13 +34,16 @@ export class GraphicNode extends VisualNode<
 
 	getSource({
 		resolvedParams,
+		size = DEFAULT_GRAPHIC_SOURCE_SIZE,
 	}: {
 		resolvedParams: ParamValues;
+		size?: number;
 	}): OffscreenCanvas {
 		const definition = getGraphicDefinition({
 			definitionId: this.params.definitionId,
 		});
 		const cacheKey = JSON.stringify({
+			size,
 			definitionId: this.params.definitionId,
 			params: resolvedParams,
 		});
@@ -49,10 +52,16 @@ export class GraphicNode extends VisualNode<
 		}
 
 		const { canvas, context } = createCanvasSurface({
-			width: DEFAULT_GRAPHIC_SOURCE_SIZE,
-			height: DEFAULT_GRAPHIC_SOURCE_SIZE,
+			width: size,
+			height: size,
 		});
 
+		// Definitions keep a stable 512-unit vector coordinate system so stroke widths
+		// and other pixel-valued parameters do not change with export resolution.
+		context.scale(
+			size / DEFAULT_GRAPHIC_SOURCE_SIZE,
+			size / DEFAULT_GRAPHIC_SOURCE_SIZE,
+		);
 		definition.render({
 			ctx: context,
 			params: resolvedParams,

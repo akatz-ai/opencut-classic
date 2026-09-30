@@ -13,13 +13,15 @@ import {
 	type NativeAudioClip,
 } from "@/services/native-media/client";
 import { shouldMaintainPitch } from "@/retime/rate";
-import { hasAnimatedVolume } from "@/timeline/audio-state";
+import { hasAudioEnvelope } from "@/timeline/audio-state";
 import { TICKS_PER_SECOND } from "@/wasm";
 import {
 	getExportVideoBitrate,
 	getQualitySliderForPreset,
 } from "@/export/settings";
 import { frameRateToFloat } from "@/fps/utils";
+import { timelineMixToWav } from "@/export/native-audio";
+import { receiveNativeExport } from "@/export/receive-native-export";
 
 type SnapshotResult =
 	| { success: true; blob: Blob; filename: string }
@@ -222,34 +224,26 @@ export class RendererManager {
 					format,
 				});
 			const nativeMediaHealth =
-				format === "mp4" && destination?.writeResponse
-					? await getNativeMediaHealth()
-					: null;
+				format === "mp4" ? await getNativeMediaHealth({ refresh: true }) : null;
 			const nativeAudioClips = includeAudio
 				? await collectAudioClips({ tracks, mediaAssets })
 				: [];
 			const hasAnimatedAudio = nativeAudioClips.some((clip) =>
-				hasAnimatedVolume({ element: clip.timelineElement }),
+				hasAudioEnvelope({ element: clip.timelineElement }),
 			);
 			const shouldUseNativeRawVideo = Boolean(
 				format === "mp4" &&
 				nativeMediaHealth?.h264Nvenc &&
-				destination?.writeResponse &&
 				!hasAnimatedAudio &&
 				encoder === "native_nvenc",
 			);
 			const shouldUseNativeAudioMix = Boolean(
-				includeAudio &&
-				format === "mp4" &&
-				nativeMediaHealth?.available &&
-				destination?.writeResponse &&
-				!hasAnimatedAudio,
+				includeAudio && format === "mp4" && nativeMediaHealth?.available,
 			);
 			const shouldUseNativeRateControl = Boolean(
 				format === "mp4" &&
 				bitrateMode === "constant" &&
 				nativeMediaHealth?.h264Nvenc &&
-				destination?.writeResponse &&
 				!shouldUseNativeRawVideo,
 			);
 			if (encoder === "native_nvenc" && !shouldUseNativeRawVideo) {
@@ -271,7 +265,7 @@ export class RendererManager {
 			if (
 				includeAudio &&
 				!shouldUseNativeRawVideo &&
-				!shouldUseNativeAudioMix
+				(!shouldUseNativeAudioMix || hasAnimatedAudio)
 			) {
 				onProgress?.({ progress: 0.05 });
 				audioBuffer = await createTimelineAudioBuffer({
@@ -363,9 +357,9 @@ export class RendererManager {
 					return { success: false, error: "Export failed to produce buffer" };
 				}
 
-				if (nativeSession && destination?.writeResponse) {
+				if (nativeSession) {
 					onProgress?.({ progress: 0.92 });
-					const clips: NativeAudioClip[] = (
+					let clips: NativeAudioClip[] = (
 						shouldUseNativeAudioMix ? nativeAudioClips : []
 					)
 						.filter((clip) => !clip.muted)
@@ -382,6 +376,24 @@ export class RendererManager {
 							}),
 							volume: clip.volume,
 						}));
+					if (shouldUseNativeAudioMix && hasAnimatedAudio) {
+						if (!audioBuffer)
+							throw new Error(
+								"Animated timeline audio mix could not be rendered",
+							);
+						clips = [
+							{
+								sourceKey: "timeline-mix",
+								file: timelineMixToWav(audioBuffer),
+								startTime: 0,
+								duration: duration / TICKS_PER_SECOND,
+								trimStart: 0,
+								rate: 1,
+								maintainPitch: false,
+								volume: 1,
+							},
+						];
+					}
 					const response = await nativeSession.finalize({
 						spec: shouldUseNativeAudioMix
 							? {
@@ -401,10 +413,13 @@ export class RendererManager {
 					if (!response.body) {
 						throw new Error("Native export response body is missing");
 					}
-					await destination.writeResponse(response.body);
+					const result = await receiveNativeExport({
+						stream: response.body,
+						destination,
+					});
 					nativeExportCompleted = true;
 					onProgress?.({ progress: 1 });
-					return { success: true, savedToFile: true };
+					return result;
 				}
 
 				return {

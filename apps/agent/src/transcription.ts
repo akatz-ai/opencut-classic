@@ -187,6 +187,7 @@ interface StagedArtifact {
 
 export async function transcribeProjectMedia({
 	projectId,
+	sessionId,
 	mediaId,
 	backend = "local",
 	model,
@@ -194,13 +195,16 @@ export async function transcribeProjectMedia({
 	force = false,
 }: {
 	projectId: string;
+	sessionId?: string;
 	mediaId?: string;
 	backend?: TranscriptionBackend;
 	model?: string;
 	language?: string;
 	force?: boolean;
 }): Promise<TranscribeMediaResult> {
-	const snapshot = parseProjectSnapshot(await inspectProject(projectId));
+	const snapshot = parseProjectSnapshot(
+		await inspectProject(projectId, sessionId),
+	);
 	const selectedMediaId = mediaId ?? selectPrimaryAudibleMedia(snapshot);
 	const media = snapshot.media.find(
 		(candidate) => candidate.id === selectedMediaId,
@@ -255,6 +259,7 @@ export async function transcribeProjectMedia({
 		staged = readStagedArtifact(
 			await runCommand({
 				projectId: snapshot.project.id,
+				sessionId,
 				kind: "stage_media",
 				payload: { mediaId: media.id, preferProxy: true },
 				timeoutMs: 10 * 60 * 1000,

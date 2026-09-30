@@ -1,4 +1,5 @@
 import type { ElementAnimations } from "@/animation/types";
+import type { ClipMotion } from "@/motion/types";
 import type { Effect } from "@/effects/types";
 import type { Mask } from "@/masks/types";
 import type { ParamValues } from "@/params";
@@ -88,6 +89,9 @@ interface BaseAudioElement extends BaseTimelineElement {
 	type: "audio";
 	buffer?: AudioBuffer;
 	retime?: RetimeConfig;
+	/** Linear-amplitude fade lengths, stored as timeline ticks. */
+	fadeInDuration?: MediaTime;
+	fadeOutDuration?: MediaTime;
 }
 
 export interface UploadAudioElement extends BaseAudioElement {
@@ -103,6 +107,7 @@ export interface LibraryAudioElement extends BaseAudioElement {
 export type AudioElement = UploadAudioElement | LibraryAudioElement;
 
 interface BaseTimelineElement {
+	motion?: ClipMotion;
 	id: string;
 	name: string;
 	duration: MediaTime;

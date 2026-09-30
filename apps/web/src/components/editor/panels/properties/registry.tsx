@@ -231,6 +231,7 @@ function getTextConfig({
 			buildTextTab({ element }),
 			buildTransformTab({ element }),
 			buildBlendingTab({ element }),
+			buildClipEffectsTab({ element }),
 		],
 	};
 }

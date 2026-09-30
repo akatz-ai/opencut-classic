@@ -1,4 +1,5 @@
 import { mediaTimeToSeconds, roundMediaTime } from "@/wasm";
+import { resolveMotion } from "@/motion";
 import { getElementLocalTime } from "@/animation";
 import { resolveEffectParamsAtTime } from "@/animation/effect-param-channel";
 import {
@@ -140,7 +141,7 @@ function resolveVisualState({
 	sourceHeight: number;
 }): ResolvedVisualNodeState | null {
 	const clipTime = context.time - params.timeOffset;
-	if (clipTime < 0 || clipTime >= params.duration) {
+	if (clipTime < 0 || clipTime >= params.duration + (params.postRoll ?? 0)) {
 		return null;
 	}
 
@@ -172,8 +173,15 @@ function resolveVisualState({
 
 	return {
 		localTime,
-		transform,
-		opacity,
+		...resolveMotion({
+			motion: params.motion,
+			localTime,
+			duration: params.duration,
+			transform,
+			opacity,
+			width: context.renderer.width,
+			height: context.renderer.height,
+		}),
 		effectPasses: resolveEffectPassGroups({
 			effects: params.effects,
 			animations: params.animations,
@@ -192,7 +200,10 @@ async function resolveVideoNode({
 	context: ResolveContext;
 }): Promise<ResolvedVisualSourceNodeState | null> {
 	const clipTime = context.time - node.params.timeOffset;
-	if (clipTime < 0 || clipTime >= node.params.duration) {
+	if (
+		clipTime < 0 ||
+		clipTime >= node.params.duration + (node.params.postRoll ?? 0)
+	) {
 		return null;
 	}
 
@@ -204,8 +215,11 @@ async function resolveVideoNode({
 		});
 	const frame = await videoCache.getFrameAt({
 		mediaId: node.params.mediaId,
+		decodeStreamId: node.params.decodeStreamId,
 		file: node.params.file,
-		time: mediaTimeToSeconds({ time: roundMediaTime({ time: sourceTimeTicks }) }),
+		time: mediaTimeToSeconds({
+			time: roundMediaTime({ time: sourceTimeTicks }),
+		}),
 		maxSourceSize: Math.max(
 			context.renderer.outputWidth,
 			context.renderer.outputHeight,
@@ -228,6 +242,7 @@ async function resolveVideoNode({
 	return {
 		...visualState,
 		source: frame.canvas,
+		sourceVersion: frame.timestamp,
 		sourceWidth: frame.canvas.width,
 		sourceHeight: frame.canvas.height,
 	};
@@ -344,15 +359,22 @@ function resolveTextNode({
 	const background = buildTextBackgroundFromElement({ element: node.params });
 
 	return {
-		transform: resolveTransformAtTime({
-			baseTransform: node.params.transform,
-			animations: node.params.animations,
+		...resolveMotion({
+			motion: node.params.motion,
 			localTime,
-		}),
-		opacity: resolveOpacityAtTime({
-			baseOpacity: node.params.opacity,
-			animations: node.params.animations,
-			localTime,
+			duration: node.params.duration,
+			width: context.renderer.width,
+			height: context.renderer.height,
+			transform: resolveTransformAtTime({
+				baseTransform: node.params.transform,
+				animations: node.params.animations,
+				localTime,
+			}),
+			opacity: resolveOpacityAtTime({
+				baseOpacity: node.params.opacity,
+				animations: node.params.animations,
+				localTime,
+			}),
 		}),
 		textColor: resolveColorAtTime({
 			baseColor:
@@ -397,7 +419,11 @@ async function resolveBlurBackgroundNode({
 		return null;
 	}
 
-	const backdropSource = await resolveBackdropSource({ node, clipTime, context });
+	const backdropSource = await resolveBackdropSource({
+		node,
+		clipTime,
+		context,
+	});
 	if (!backdropSource) {
 		return null;
 	}
@@ -437,8 +463,11 @@ async function resolveBackdropSource({
 			});
 		const frame = await videoCache.getFrameAt({
 			mediaId: node.params.mediaId,
+			decodeStreamId: node.params.decodeStreamId,
 			file: node.params.file,
-			time: mediaTimeToSeconds({ time: roundMediaTime({ time: sourceTimeTicks }) }),
+			time: mediaTimeToSeconds({
+				time: roundMediaTime({ time: sourceTimeTicks }),
+			}),
 			maxSourceSize: Math.max(
 				context.renderer.outputWidth,
 				context.renderer.outputHeight,
@@ -450,6 +479,7 @@ async function resolveBackdropSource({
 
 		return {
 			source: frame.canvas,
+			sourceVersion: frame.timestamp,
 			width: frame.canvas.width,
 			height: frame.canvas.height,
 		};

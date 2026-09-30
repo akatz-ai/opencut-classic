@@ -7,6 +7,7 @@ import {
 } from "mediabunny";
 import { LruCache } from "@/services/cache/lru-cache";
 import { incrementCounter } from "@/diagnostics/render-perf";
+import { getVideoSinkKey } from "./sink-key";
 
 const MAX_VIDEO_SINKS = 8;
 
@@ -46,13 +47,15 @@ export class VideoCache {
 		file,
 		time,
 		maxSourceSize,
+		decodeStreamId,
 	}: {
 		mediaId: string;
 		file: File;
 		time: number;
 		maxSourceSize?: number;
+		decodeStreamId?: string;
 	}): Promise<WrappedCanvas | null> {
-		const sinkKey = this.getSinkKey({ mediaId, maxSourceSize });
+		const sinkKey = getVideoSinkKey({ mediaId, maxSourceSize, decodeStreamId });
 		incrementCounter({
 			name: this.sinks.has(sinkKey)
 				? "videoSinkCacheHit"
@@ -378,18 +381,6 @@ export class VideoCache {
 				(s) => s.currentFrame,
 			).length,
 		};
-	}
-
-	private getSinkKey({
-		mediaId,
-		maxSourceSize,
-	}: {
-		mediaId: string;
-		maxSourceSize?: number;
-	}): string {
-		return maxSourceSize
-			? `${mediaId}@${Math.max(2, Math.round(maxSourceSize))}`
-			: mediaId;
 	}
 }
 

@@ -101,12 +101,19 @@ then applies trim, retime, pitch policy, delay, gain, mixing, limiting, and AAC
 encoding before copying the H.264 video into the final MP4. The final response
 streams into the selected file handle and the session is removed.
 
-This path avoids the previous full-duration stereo `AudioBuffer` and guarantees
-AAC-in-MP4 on Linux. It is selected for MP4 exports with audio when the native
-engine and File System Access destination are available. Animated volume still
-uses the browser path so its keyframe interpolation remains exact. WebM,
-non-local deployments, and browsers without the save-file API also retain the
-browser fallback.
+MP4 audio is always AAC-LC. The native mix is selected when the local engine is
+available, including agent exports and browsers without the save-file API.
+Ordinary timelines avoid a full-duration stereo `AudioBuffer`. Animated-volume
+timelines still render their gain automation in the browser, then pass PCM WAV
+to the native AAC encoder. Downloads without a save-file destination retain
+the completed output buffer in memory.
+
+Without the native engine, browser MP4 export requires verified AAC-LC encoder
+support at 192 kbps. Unsupported AAC and encoder errors fail the export; there
+is no Opus substitution. WebM explicitly uses Opus. Native finalization encodes
+non-AAC-LC input audio to AAC-LC and probes the completed MP4 before success.
+The rejected 39.5-second Termina Opus MP4 passed through this finalizer with
+full-duration AAC-LC, unchanged H.264 video packets, and a clean FFmpeg decode.
 
 The final mix uses FFmpeg's look-ahead limiter with latency compensation
 enabled. Without that option, the limiter delayed the complete timeline audio
@@ -158,16 +165,17 @@ from about 17m14s at 2560x1440/60 to 7m34s, a 2.28x wall-time improvement.
 
 ## Local Rust/WASM development
 
-Set `OPENCUT_LOCAL_WASM=1` in `apps/web/.env.local`, then build the local
-browser package before starting or building the web app:
+Build the local browser package before starting or building the web app:
 
 ```sh
 bun run build:wasm
 bun run build:web
 ```
 
-With the flag unset, the application continues to resolve the published
-`opencut-wasm` package.
+The motion/brand-kit additions now require the local Rust/WASM build. The web
+configuration always resolves `rust/wasm/pkg`; build it with `bun run build:wasm`
+before building or starting the web app. The published 0.2.10 package does not
+contain the new transition exports.
 
 On the `akatz-arch` NVIDIA/Niri workstation, the verified installed-PWA launch
 uses native Wayland presentation and Chromium's WebGPU service:
@@ -309,7 +317,7 @@ canvas's missing CSS, not cropped export pixels.
 ## Deferred work
 
 1. Preserve animated-volume interpolation in the native FFmpeg filter graph so
-   those exports can also leave the full-buffer browser fallback.
+   those exports can also avoid the full-duration browser PCM mix.
 2. Investigate direct `VideoFrame`/external-texture or GPU-native NV12 ingestion
    when concurrent full-frame layers become common, or when a zero-readback
    path to NVENC becomes available; the one-layer path has comfortable preview

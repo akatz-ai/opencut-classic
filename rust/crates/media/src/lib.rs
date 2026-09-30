@@ -105,6 +105,7 @@ struct ProbeOutput {
 struct ProbeStream {
     codec_type: Option<String>,
     codec_name: Option<String>,
+    profile: Option<String>,
     width: Option<u32>,
     height: Option<u32>,
 }
@@ -266,16 +267,46 @@ impl MediaEngine {
                 command.args(["-c:v", "copy"]);
             }
             command
-                .args(["-c:a", "aac", "-b:a", DEFAULT_AUDIO_BITRATE])
+                .args([
+                    "-c:a",
+                    "aac",
+                    "-profile:a",
+                    "aac_low",
+                    "-b:a",
+                    DEFAULT_AUDIO_BITRATE,
+                ])
                 .args(["-movflags", "+faststart", "-shortest"]);
         } else {
             command.args(["-map", "0:v:0", "-map", "0:a?"]);
             if let Some(options) = video_transcode {
-                command
-                    .args(nvenc_video_args(options))
-                    .args(["-c:a", "copy"]);
+                command.args(nvenc_video_args(options));
             } else {
-                command.args(["-c", "copy"]);
+                command.args(["-c:v", "copy"]);
+            }
+            let input = self.probe(video)?;
+            let compatible = input
+                .streams
+                .iter()
+                .filter(|stream| stream.codec_type.as_deref() == Some("audio"))
+                .all(|stream| {
+                    stream.codec_name.as_deref() == Some("aac")
+                        && stream.profile.as_deref() == Some("LC")
+                });
+            if compatible {
+                command.args(["-c:a", "copy"]);
+            } else {
+                command.args([
+                    "-c:a",
+                    "aac",
+                    "-profile:a",
+                    "aac_low",
+                    "-b:a",
+                    DEFAULT_AUDIO_BITRATE,
+                    "-ar",
+                    "48000",
+                    "-ac",
+                    "2",
+                ]);
             }
             command.args(["-movflags", "+faststart"]);
         }
@@ -284,7 +315,22 @@ impl MediaEngine {
             .arg(output)
             .output()
             .with_context(|| format!("failed to run {}", self.ffmpeg.display()))?;
-        ensure_success(&result, "FFmpeg export mux")
+        ensure_success(&result, "FFmpeg export mux")?;
+        let completed = self.probe(output)?;
+        let audio: Vec<_> = completed
+            .streams
+            .iter()
+            .filter(|stream| stream.codec_type.as_deref() == Some("audio"))
+            .collect();
+        if spec.is_some() && audio.is_empty() {
+            bail!("MP4 export did not produce the requested AAC audio track");
+        }
+        if audio.iter().any(|stream| {
+            stream.codec_name.as_deref() != Some("aac") || stream.profile.as_deref() != Some("LC")
+        }) {
+            bail!("MP4 export produced incompatible audio; AAC-LC is required");
+        }
+        Ok(())
     }
 
     pub fn encode_raw_video(&self, options: &RawVideoOptions) -> Result<()> {

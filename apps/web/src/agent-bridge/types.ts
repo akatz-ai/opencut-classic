@@ -2,10 +2,16 @@ import type { SceneTracks } from "@/timeline";
 
 export type AgentCommandKind =
 	| "stage_media"
+	| "edit_batch"
+	| "catalog"
 	| "apply_cut_plan"
 	| "export_project";
 
 export interface AgentProjectSnapshot {
+	sessionId?: string;
+	receivedAt?: string;
+	agentPaused?: boolean;
+	selectedElements?: Array<{ trackId: string; elementId: string }>;
 	revision: string;
 	capturedAt: string;
 	project: {
@@ -37,6 +43,8 @@ export interface AgentProjectSnapshot {
 }
 
 export interface AgentBridgeCommand {
+	sessionId?: string;
+	expiresAt?: string;
 	id: string;
 	projectId: string;
 	kind: AgentCommandKind;

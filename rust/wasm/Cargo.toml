@@ -11,6 +11,8 @@ path = "src/wasm.rs"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+audio-envelope = { path = "../crates/audio-envelope" }
+export-settings = { path = "../crates/export-settings" }
 bridge = { version = "0.1.0", path = "../crates/bridge" }
 compositor = { version = "0.1.0", path = "../crates/compositor" }
 console_error_panic_hook = "0.1.7"
@@ -19,6 +21,8 @@ futures-channel = "0.3.31"
 gpu = { version = "0.1.0", path = "../crates/gpu", features = ["wasm"] }
 js-sys = "0.3.93"
 masks = { version = "0.1.0", path = "../crates/masks" }
+motion = { version = "0.1.0", path = "../crates/motion" }
+roughcut = { path = "../crates/roughcut" }
 num-traits = "0.2.19"
 serde = { version = "1.0.228", features = ["derive"] }
 serde-wasm-bindgen = "0.6.5"

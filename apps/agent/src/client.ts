@@ -1,5 +1,7 @@
 export type AgentCommandKind =
 	| "stage_media"
+	| "edit_batch"
+	| "catalog"
 	| "apply_cut_plan"
 	| "export_project";
 
@@ -31,10 +33,23 @@ export async function listProjects(): Promise<unknown> {
 	return await (await request("/api/agent-bridge/state")).json();
 }
 
-export async function inspectProject(projectId: string): Promise<unknown> {
+export async function inspectProject(
+	projectId: string,
+	sessionId?: string,
+): Promise<unknown> {
+	return inspectView(projectId, {
+		detail: "full",
+		...(sessionId ? { sessionId } : {}),
+	});
+}
+
+export async function inspectView(
+	projectId: string,
+	options: Record<string, string> = {},
+): Promise<unknown> {
 	return await (
 		await request(
-			`/api/agent-bridge/state?projectId=${encodeURIComponent(projectId)}`,
+			`/api/agent-bridge/state?${new URLSearchParams({ projectId, ...options })}`,
 		)
 	).json();
 }
@@ -44,19 +59,30 @@ export async function runCommand({
 	kind,
 	payload,
 	expectedRevision,
+	sessionId,
+	idempotencyKey,
 	timeoutMs = 120_000,
 }: {
 	projectId: string;
 	kind: AgentCommandKind;
 	payload: Record<string, unknown>;
 	expectedRevision?: string;
+	sessionId?: string;
+	idempotencyKey?: string;
 	timeoutMs?: number;
 }): Promise<unknown> {
 	const queued: unknown = await (
 		await request("/api/agent-bridge/commands", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ projectId, kind, payload, expectedRevision }),
+			body: JSON.stringify({
+				projectId,
+				kind,
+				payload,
+				expectedRevision,
+				sessionId,
+				idempotencyKey,
+			}),
 		})
 	).json();
 	const commandId = readCommandId(queued);
@@ -68,7 +94,20 @@ export async function runCommand({
 		if (response.status !== 202) return await response.json();
 		await Bun.sleep(250);
 	}
-	throw new Error(`Agent command ${commandId} timed out after ${timeoutMs}ms`);
+	throw new Error(
+		`Agent command ${commandId} timed out after ${timeoutMs}ms; this is not cancellation. Inspect command-status before retrying. For edit batches, reuse the same key and identical inputs.`,
+	);
+}
+
+export async function commandStatus(
+	projectId: string,
+	commandId: string,
+): Promise<unknown> {
+	return (
+		await request(
+			`/api/agent-bridge/commands/${encodeURIComponent(commandId)}?projectId=${encodeURIComponent(projectId)}`,
+		)
+	).json();
 }
 
 function readCommandId(value: unknown): string {
